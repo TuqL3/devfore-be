@@ -1,0 +1,30 @@
+# Local dev: http on :80, không TLS.
+# Prod override ở deploy/Caddyfile.prod (P9).
+
+{
+	auto_https off
+	admin off
+}
+
+:80 {
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+
+	handle /healthz {
+		reverse_proxy api:8080
+	}
+
+	handle /readyz {
+		reverse_proxy api:8080
+	}
+
+	# Terminal lab giữ WS mở tới 60 phút — không đặt timeout ngắn ở đây.
+	handle /ws/* {
+		reverse_proxy api:8080
+	}
+
+	handle {
+		reverse_proxy web:5173
+	}
+}

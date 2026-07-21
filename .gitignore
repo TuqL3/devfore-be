@@ -1,0 +1,11 @@
+.env
+*.local
+
+# Go
+tmp/
+server
+
+# Editor
+.DS_Store
+.idea/
+*.swp
