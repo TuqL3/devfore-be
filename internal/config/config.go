@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 )
@@ -18,6 +19,14 @@ type Config struct {
 	DBName string `env:"DB_NAME,required"`
 
 	CORSOrigins []string `env:"CORS_ORIGINS" envSeparator:","`
+
+	JWTSecret          string        `env:"JWT_SECRET,required"`
+	AccessTTL          time.Duration `env:"ACCESS_TTL" envDefault:"15m"`
+	RefreshTTL         time.Duration `env:"REFRESH_TTL" envDefault:"168h"`
+	GoogleClientID     string        `env:"GOOGLE_CLIENT_ID"`
+	GoogleClientSecret string        `env:"GOOGLE_CLIENT_SECRET"`
+	GoogleRedirectURL  string        `env:"GOOGLE_REDIRECT_URL" envDefault:"http://localhost:8080/api/auth/google/callback"`
+	FrontendURL        string        `env:"FRONTEND_URL" envDefault:"http://localhost:5173"`
 }
 
 func Load() (*Config, error) {
@@ -28,7 +37,6 @@ func Load() (*Config, error) {
 	return &c, nil
 }
 
-// DSN returns the Postgres connection string.
 func (c *Config) DSN() string {
 	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable TimeZone=UTC",
 		c.DBHost, c.DBPort, c.DBUser, c.DBPass, c.DBName)

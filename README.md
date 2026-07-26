@@ -27,68 +27,73 @@ Chưa chốt (chỉ cần trước P9, không chặn P0–P8): nhà cung cấp V
 ## 1. Stack
 
 ### Frontend
-| Thành phần | Chọn |
-|---|---|
-| Build | Vite + React 19 + TypeScript |
-| Router | React Router v7 |
-| Server state | TanStack Query |
-| Client state | React Context |
-| UI | TailwindCSS + shadcn/ui |
-| Terminal | xterm.js + `@xterm/addon-fit` |
-| Form | react-hook-form + zod |
-| Markdown | react-markdown + shiki |
-| Ngày giờ | `Intl.RelativeTimeFormat` (native) |
+
+| Thành phần   | Chọn                               |
+| ------------ | ---------------------------------- |
+| Build        | Vite + React 19 + TypeScript       |
+| Router       | React Router v7                    |
+| Server state | TanStack Query                     |
+| Client state | React Context                      |
+| UI           | TailwindCSS + shadcn/ui            |
+| Terminal     | xterm.js + `@xterm/addon-fit`      |
+| Form         | react-hook-form + zod              |
+| Markdown     | react-markdown + shiki             |
+| Ngày giờ     | `Intl.RelativeTimeFormat` (native) |
 
 Không dùng: Next.js, Redux, Zustand, axios, dayjs, i18n, Storybook.
 
 ### Backend
-| Thành phần | Chọn |
-|---|---|
-| Ngôn ngữ | Go 1.25 |
-| Router | Gin |
-| ORM | GORM — **chỉ để query, không dùng `AutoMigrate`** |
-| Driver | pgx v5 |
-| Migration | golang-migrate (file SQL) |
-| WebSocket | coder/websocket |
-| Docker | docker/docker/client |
-| Auth | golang-jwt/jwt v5 + golang.org/x/oauth2 + bcrypt |
-| 2FA | pquerna/otp (TOTP cho admin) |
-| Log | log/slog (JSON) |
-| Validate | go-playground/validator |
-| Test | stdlib testing + testcontainers-go |
+
+| Thành phần | Chọn                                              |
+| ---------- | ------------------------------------------------- |
+| Ngôn ngữ   | Go 1.25                                           |
+| Router     | Gin                                               |
+| ORM        | GORM — **chỉ để query, không dùng `AutoMigrate`** |
+| Driver     | pgx v5                                            |
+| Migration  | golang-migrate (file SQL)                         |
+| WebSocket  | coder/websocket                                   |
+| Docker     | docker/docker/client                              |
+| Auth       | golang-jwt/jwt v5 + golang.org/x/oauth2 + bcrypt  |
+| 2FA        | pquerna/otp (TOTP cho admin)                      |
+| Log        | log/slog (JSON)                                   |
+| Validate   | go-playground/validator                           |
+| Test       | stdlib testing + testcontainers-go                |
 
 Không dùng: Redis, gRPC, message queue, DI framework.
 
 ### Dữ liệu
+
 PostgreSQL 16. Backup `pg_dump` cron → nén → S3/R2. Diễn tập restore hàng tháng.
 
 ### Sandbox lab
-| Lớp | Chọn |
-|---|---|
-| Runtime | Docker Engine API qua `tecnativa/docker-socket-proxy` |
-| Image lab | Alpine / Debian slim, user `student` non-root |
-| Giới hạn | `--memory=512m --cpus=0.5 --pids-limit=256 --cap-drop=ALL --security-opt=no-new-privileges --read-only` + tmpfs `/tmp` |
-| Mạng | `--network=none` mặc định |
-| Lab dạy Docker | `sysbox-runc` |
-| Nâng cấp sau | gVisor (`--runtime=runsc`) |
+
+| Lớp            | Chọn                                                                                                                   |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Runtime        | Docker Engine API qua `tecnativa/docker-socket-proxy`                                                                  |
+| Image lab      | Alpine / Debian slim, user `student` non-root                                                                          |
+| Giới hạn       | `--memory=512m --cpus=0.5 --pids-limit=256 --cap-drop=ALL --security-opt=no-new-privileges --read-only` + tmpfs `/tmp` |
+| Mạng           | `--network=none` mặc định                                                                                              |
+| Lab dạy Docker | `sysbox-runc`                                                                                                          |
+| Nâng cấp sau   | gVisor (`--runtime=runsc`)                                                                                             |
 
 ### Hạ tầng
-| Hạng mục | Chọn |
-|---|---|
-| Local | Docker Compose + `air` (hot reload Go) |
-| Prod | 1 VPS + Docker Compose (P11 tách 2 VPS) |
-| Reverse proxy | Caddy |
-| Registry | GHCR |
-| CI/CD | GitHub Actions |
-| Provision | Terraform |
-| Config server | Ansible |
-| Secrets | SOPS + age (git) / GitHub Secrets (CI) |
-| Metrics | Prometheus + Grafana |
-| Log | Loki + Promtail |
-| Alert | Alertmanager → Telegram |
-| Traffic web | Umami (self-host) |
-| Scan | trivy, gitleaks |
-| Lint | golangci-lint, gofumpt, eslint, prettier, lefthook |
+
+| Hạng mục      | Chọn                                               |
+| ------------- | -------------------------------------------------- |
+| Local         | Docker Compose + `air` (hot reload Go)             |
+| Prod          | 1 VPS + Docker Compose (P11 tách 2 VPS)            |
+| Reverse proxy | Caddy                                              |
+| Registry      | GHCR                                               |
+| CI/CD         | GitHub Actions                                     |
+| Provision     | Terraform                                          |
+| Config server | Ansible                                            |
+| Secrets       | SOPS + age (git) / GitHub Secrets (CI)             |
+| Metrics       | Prometheus + Grafana                               |
+| Log           | Loki + Promtail                                    |
+| Alert         | Alertmanager → Telegram                            |
+| Traffic web   | Umami (self-host)                                  |
+| Scan          | trivy, gitleaks                                    |
+| Lint          | golangci-lint, gofumpt, eslint, prettier, lefthook |
 
 Không dùng: Jaeger/tracing, ELK, Vault, Consul, service mesh.
 
@@ -127,17 +132,17 @@ task: "Tạo thư mục /home/student/devforge"
 check: test -d /home/student/devforge
 ```
 
-Học viên bấm *Kiểm tra* nhiều lần được. *Nộp bài* chạy lần cuối rồi đóng session.
+Học viên bấm _Kiểm tra_ nhiều lần được. _Nộp bài_ chạy lần cuối rồi đóng session.
 
 ---
 
 ## 3. Nguồn sự thật của nội dung
 
-| Loại | Sửa ở đâu |
-|---|---|
-| Nội dung khoá học/lab (tiêu đề, markdown, thứ tự, điểm, thời lượng) | Admin UI → DB |
-| Image lab (Dockerfile, gói cài sẵn) | Git + CI build |
-| `check_script` | Admin UI + nút Chạy thử |
+| Loại                                                                | Sửa ở đâu               |
+| ------------------------------------------------------------------- | ----------------------- |
+| Nội dung khoá học/lab (tiêu đề, markdown, thứ tự, điểm, thời lượng) | Admin UI → DB           |
+| Image lab (Dockerfile, gói cài sẵn)                                 | Git + CI build          |
+| `check_script`                                                      | Admin UI + nút Chạy thử |
 
 **DB là nguồn sự thật duy nhất.** YAML chỉ dùng `make seed` cho môi trường trống lúc dựng local — không seed đè lúc app khởi động.
 
@@ -177,6 +182,7 @@ Bảng xếp hạng = query `SUM(điểm cao nhất mỗi lab) GROUP BY user`. K
 ## 5. API
 
 ### Public / student
+
 ```
 POST   /api/auth/register              {username, email, password}
 POST   /api/auth/login
@@ -203,6 +209,7 @@ WS     /ws/chat
 ```
 
 ### Admin — middleware `RequireRole("admin")`, ghi audit tự động
+
 ```
 GET    /api/admin/stats
 GET    /api/admin/courses              ?status=
@@ -227,27 +234,29 @@ GET    /api/admin/audit                ?actor=&action=
 ## 6. Màn hình
 
 ### Học viên
-| Route | Nội dung |
-|---|---|
-| `/login`, `/register` | form + nút "Đăng nhập với Google" |
-| `/` | Landing 2 cột. Trái: "Làm Chủ Quy Trình DevOps & Cloud-Native" + mô tả + 4 chip (Thực hành trực tiếp / Môi trường Linux / Quản lý Git / Container hóa) + 2 nút *Khám phá khóa học*, *Tìm hiểu thêm*. Phải: ảnh DevOps |
-| `/courses` | Lưới card khoá học |
-| `/courses/:slug` | Phải: ảnh, cấp độ, số lab, học viên, cập nhật, nút Đăng ký. Trái: 4 tab — Nội dung khoá học \| Ôn tập \| Bảng xếp hạng \| Trạng thái |
-| `/labs/:slug` | Trái: đề bài + checklist task + đồng hồ đếm ngược. Phải: terminal xterm.js. Nút *Kiểm tra* / *Nộp bài* |
-| `/history` | Lịch sử làm bài user hiện tại |
-| `/chat` | Phòng chat chung |
 
-*Bắt đầu làm bài thực hành* → modal xác nhận ("Bạn có 60 phút, container sẽ bị xoá khi hết giờ") → `POST /start`.
+| Route                 | Nội dung                                                                                                                                                                                                              |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/login`, `/register` | form + nút "Đăng nhập với Google"                                                                                                                                                                                     |
+| `/`                   | Landing 2 cột. Trái: "Làm Chủ Quy Trình DevOps & Cloud-Native" + mô tả + 4 chip (Thực hành trực tiếp / Môi trường Linux / Quản lý Git / Container hóa) + 2 nút _Khám phá khóa học_, _Tìm hiểu thêm_. Phải: ảnh DevOps |
+| `/courses`            | Lưới card khoá học                                                                                                                                                                                                    |
+| `/courses/:slug`      | Phải: ảnh, cấp độ, số lab, học viên, cập nhật, nút Đăng ký. Trái: 4 tab — Nội dung khoá học \| Ôn tập \| Bảng xếp hạng \| Trạng thái                                                                                  |
+| `/labs/:slug`         | Trái: đề bài + checklist task + đồng hồ đếm ngược. Phải: terminal xterm.js. Nút _Kiểm tra_ / _Nộp bài_                                                                                                                |
+| `/history`            | Lịch sử làm bài user hiện tại                                                                                                                                                                                         |
+| `/chat`               | Phòng chat chung                                                                                                                                                                                                      |
+
+_Bắt đầu làm bài thực hành_ → modal xác nhận ("Bạn có 60 phút, container sẽ bị xoá khi hết giờ") → `POST /start`.
 
 ### Admin
-| Route | Nội dung |
-|---|---|
-| `/admin` | Dashboard: user mới 7 ngày, session đang chạy, lab hoàn thành, tỉ lệ pass theo lab |
-| `/admin/courses` | CRUD khoá học / lab / task, kéo thả sắp xếp, draft → publish |
+
+| Route                  | Nội dung                                                                               |
+| ---------------------- | -------------------------------------------------------------------------------------- |
+| `/admin`               | Dashboard: user mới 7 ngày, session đang chạy, lab hoàn thành, tỉ lệ pass theo lab     |
+| `/admin/courses`       | CRUD khoá học / lab / task, kéo thả sắp xếp, draft → publish                           |
 | `/admin/labs/:id/edit` | Soạn đề bài markdown, thêm task, chọn image từ dropdown, **nút Chạy thử** check_script |
-| `/admin/users` | Danh sách, tìm kiếm, tiến độ, ban/unban |
-| `/admin/sessions` | Session đang chạy: ai, lab gì, còn bao lâu, nút Kill |
-| `/admin/audit` | Audit log, append-only |
+| `/admin/users`         | Danh sách, tìm kiếm, tiến độ, ban/unban                                                |
+| `/admin/sessions`      | Session đang chạy: ai, lab gì, còn bao lâu, nút Kill                                   |
+| `/admin/audit`         | Audit log, append-only                                                                 |
 
 **Nút Chạy thử**: tạo 1 container lab thật, chạy `check_script`, trả exit code + stdout. Dùng lại đúng luồng `POST /api/labs/:id/start`.
 
@@ -258,6 +267,7 @@ Traffic web xem ở Umami, metrics hệ thống ở Grafana. Dashboard admin ch�
 ## 7. Bảo mật
 
 ### Sandbox lab
+
 Container do học viên gõ lệnh = code lạ chạy trên máy chủ. Bắt buộc:
 
 - **Không mount `/var/run/docker.sock` vào container lab.** API truy cập Docker qua `tecnativa/docker-socket-proxy`, chỉ mở `containers/create,start,exec,remove`.
@@ -270,6 +280,7 @@ Container do học viên gõ lệnh = code lạ chạy trên máy chủ. Bắt b
 - Nâng cấp trước khi mở công khai: gVisor (`--runtime=runsc`)
 
 ### Admin
+
 1. Admin đầu tiên tạo bằng CLI trên server: `./devforge admin create --email=...`. **Không có route đăng ký admin trong API.**
 2. **TOTP 2FA bắt buộc** cho role admin.
 3. Role lưu ở bảng `user_roles` riêng, không phải cột `is_admin` trên `users`.
@@ -282,18 +293,71 @@ Container do học viên gõ lệnh = code lạ chạy trên máy chủ. Bắt b
 
 ## 8. Môi trường
 
-**Build 1 lần, chạy mọi nơi.** Cùng image `ghcr.io/<user>/devforge-api:<git-sha>` chạy ở local lẫn prod. Khác nhau chỉ ở env var inject lúc chạy. Không có `Dockerfile.prod` riêng.
+**Build 1 lần, chạy mọi nơi — áp dụng cho API (Go).** Cùng image `ghcr.io/<user>/devforge-api:<git-sha>` chạy ở local lẫn prod. Khác nhau chỉ ở env var inject lúc chạy. Không có `Dockerfile.prod` riêng.
 
-| | local | production |
-|---|---|---|
-| Chạy bằng | `docker compose up` | `docker compose -f compose.yml -f compose.prod.yml up -d` |
-| Config | `.env` (từ `.env.example`) | SOPS-encrypted / env trên server |
-| DB | postgres container, seed giả | postgres volume + pg_dump cron |
-| TLS | không | Caddy + Let's Encrypt |
-| Log | stdout | slog JSON → Promtail → Loki |
-| Deploy | hot reload (`air`, `vite dev`) | GitHub Actions → SSH → `compose pull && up -d` |
+> **FE khác API:** Vite **bake `VITE_API_URL` lúc build**, không phải runtime. Image FE prod ≠ image FE local → phải build riêng mỗi môi trường (CI truyền `VITE_API_URL` qua `--build-arg`, tag theo git-sha). Không dùng chung 1 image FE cho cả 2 env. Câu "build 1 lần chạy mọi nơi" chỉ đúng cho API.
+
+|           | local                          | production                                                              |
+| --------- | ------------------------------ | ----------------------------------------------------------------------- |
+| Chạy bằng | `docker compose up`            | `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d` |
+| Config    | `.env` (từ `.env.example`)     | SOPS-encrypted / env trên server                                        |
+| DB        | postgres container, seed giả   | postgres volume + pg_dump cron                                          |
+| TLS       | không                          | Caddy + Let's Encrypt                                                   |
+| Log       | stdout                         | slog JSON → Promtail → Loki                                             |
+| Deploy    | hot reload (`air`, `vite dev`) | GitHub Actions → SSH → `compose pull && up -d`                          |
 
 Rollback = trỏ về image tag SHA cũ, không revert code rồi build lại.
+
+### Biến môi trường
+
+| Biến                                          | local                   | production             | Nguồn      |
+| --------------------------------------------- | ----------------------- | ---------------------- | ---------- |
+| `APP_ENV`                                     | development             | production             | compose    |
+| `PORT`                                        | 8080                    | 8080                   | compose    |
+| `LOG_LEVEL`                                   | debug                   | info                   | compose    |
+| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_NAME` | (compose)               | (compose)              | compose    |
+| `DB_PASSWORD`                                 | `.env` giả              | SOPS / GitHub Secrets  | **secret** |
+| `JWT_SECRET`                                  | `.env` giả              | SOPS / GitHub Secrets  | **secret** |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`   | `.env`                  | SOPS / GitHub Secrets  | **secret** |
+| `CORS_ORIGINS`                                | `http://localhost:5173` | `https://<domain>`     | compose    |
+| `DATABASE_URL` (migrate)                      | `sslmode=disable`       | `sslmode=require`      | **secret** |
+| `VITE_API_URL` (FE, **build-time**)           | `http://localhost:8080` | `https://<domain>/api` | build-arg  |
+
+`.env.example` phải liệt kê đủ biến trên (giá trị giả). Secret prod **không bao giờ vào git thô** — chỉ SOPS-encrypted (age) hoặc GitHub Secrets.
+
+### Healthcheck (điều kiện rollback)
+
+Rollback tự động ở CI chỉ chạy được nếu `api` khai báo healthcheck trong compose:
+
+```yaml
+api:
+  healthcheck:
+    test: ["CMD", "/server", "healthcheck"] # binary tự gọi /healthz nội bộ
+    interval: 10s
+    timeout: 3s
+    retries: 5
+```
+
+Image prod là **distroless (không shell/wget)** → không dùng được `CMD-SHELL "wget ..."`. Phải thêm subcommand `/server healthcheck` vào binary để tự probe `/healthz`.
+
+### Domain & routing (P9)
+
+**1 domain, route bằng path** qua Caddy edge → không CORS ở prod, 1 cert TLS:
+
+```
+https://<domain>/         → FE static (Caddy serve)
+https://<domain>/api/*    → Go API
+https://<domain>/ws/*     → Go API (WebSocket → wss)
+```
+
+Hệ quả khi chốt domain:
+
+- FE build với `VITE_API_URL=https://<domain>/api`, WS dùng `wss://<domain>/ws/...`
+- `CORS_ORIGINS` prod = same-origin → gần như chỉ còn cần cho dev (`:5173`)
+- OAuth: đăng ký redirect `https://<domain>/api/auth/google/callback` ở Google Console + set env
+- Caddy auto Let's Encrypt: cần DNS A record trỏ VPS **trước khi** `up`
+
+Không tách `api.` / `app.` subdomain → tránh CORS + cookie cross-site (`SameSite`) rắc rối. Muốn subdomain thì phải bật CORS credentials + set cookie domain — đắt hơn, không cần cho quy mô này.
 
 ### Migration tương thích ngược
 
@@ -306,6 +370,7 @@ Deploy 3:  DROP COLUMN user_name; code chỉ dùng username
 ```
 
 ### CI/CD
+
 ```
 push branch → lint + test + gitleaks
             → build image, trivy scan
@@ -318,26 +383,27 @@ merge main  → deploy prod qua SSH
 
 ## 9. Lộ trình
 
-| Chặng | Nội dung |
-|---|---|
-| **P0** | Scaffold: vite app, Gin api, docker-compose, migration, lint, lefthook |
-| **P1** | Auth: register/login JWT + Google OAuth + middleware + Context ở FE |
-| **P2** | Landing + danh sách khoá học + chi tiết khoá học (4 tab) |
-| **P3** | **Lab runtime**: container lifecycle, socket-proxy, WS terminal, reaper 60' |
-| **P3.5** | Observability: Prometheus + Grafana + Loki + alert |
-| **P4** | Chấm điểm: check script, submit, submissions, trang Lịch sử |
-| **P4.5** | Roles, `RequireRole`, CLI tạo admin, TOTP 2FA, audit log |
-| **P5** | Admin: CRUD khoá học/lab/task, dry-run check_script, draft→publish |
-| **P6** | Admin: users (ban/unban), sessions đang chạy (kill) |
-| **P7** | Leaderboard + tab Trạng thái + chat WS |
-| **P8** | Nội dung: 3 khoá (Linux, Git, Docker) × 5 lab |
-| **P9** | Deploy prod: Terraform + Ansible + Caddy + GitHub Actions |
-| **P10** | Backup pg_dump + diễn tập restore, Umami, dashboard admin |
-| **P11** | *(tuỳ chọn)* tách runner node riêng, gVisor, hoặc chuyển k3s |
+| Chặng    | Nội dung                                                                    |
+| -------- | --------------------------------------------------------------------------- |
+| **P0**   | Scaffold: vite app, Gin api, docker-compose, migration, lint, lefthook      |
+| **P1**   | Auth: register/login JWT + Google OAuth + middleware + Context ở FE         |
+| **P2**   | Landing + danh sách khoá học + chi tiết khoá học (4 tab)                    |
+| **P3**   | **Lab runtime**: container lifecycle, socket-proxy, WS terminal, reaper 60' |
+| **P3.5** | Observability: Prometheus + Grafana + Loki + alert                          |
+| **P4**   | Chấm điểm: check script, submit, submissions, trang Lịch sử                 |
+| **P4.5** | Roles, `RequireRole`, CLI tạo admin, TOTP 2FA, audit log                    |
+| **P5**   | Admin: CRUD khoá học/lab/task, dry-run check_script, draft→publish          |
+| **P6**   | Admin: users (ban/unban), sessions đang chạy (kill)                         |
+| **P7**   | Leaderboard + tab Trạng thái + chat WS                                      |
+| **P8**   | Nội dung: 3 khoá (Linux, Git, Docker) × 5 lab                               |
+| **P9**   | Deploy prod: Terraform + Ansible + Caddy + GitHub Actions                   |
+| **P10**  | Backup pg_dump + diễn tập restore, Umami, dashboard admin                   |
+| **P11**  | _(tuỳ chọn)_ tách runner node riêng, gVisor, hoặc chuyển k3s                |
 
 **P3 là phần rủi ro nhất — làm sớm**, trước khi đầu tư nhiều vào UI.
 
 Metrics tối thiểu ở P3.5:
+
 ```
 devforge_lab_sessions_active          gauge
 devforge_lab_containers_running       gauge   # so với gauge trên → phát hiện rò rỉ
@@ -345,59 +411,76 @@ devforge_reaper_last_run_timestamp    gauge   # alert nếu > 5 phút
 devforge_reaper_killed_total          counter
 devforge_lab_start_duration_seconds   histogram
 ```
+
 Alert quan trọng nhất: `lab_containers_running > lab_sessions_active` kéo dài → có container mồ côi.
 
 ---
 
-## 10. Cấu trúc thư mục
+## 10. Cấu trúc — polyrepo
+
+Tách **2 repo độc lập** (kiểu outsource), gom trong 1 workspace để dễ quản lý:
 
 ```
-devforge/
-├── fe/                         # Vite + React
-│   ├── src/{pages,components,api,hooks,context,lib}
-│   │   └── pages/admin/
-│   ├── Dockerfile              # dev / build / prod (Caddy serve static)
-│   └── Caddyfile.static
-├── be/                         # Go
+devforge-workspace/
+├── README.md                   # tài liệu tổng (file này)
+│
+├── devforge-be/                # REPO 1 — Go backend + orchestration
 │   ├── cmd/server/main.go
 │   ├── cmd/cli/main.go         # devforge admin create ...
 │   ├── internal/{config,db,auth,courses,labs,sandbox,admin,chat,ws,metrics}
+│   ├── migrations/             # SQL, golang-migrate
+│   ├── labs/                   # Dockerfile image lab + seed YAML
+│   ├── deploy/
+│   │   ├── caddy/              # edge proxy (prod)
+│   │   ├── terraform/          # VPS, DNS, firewall        (P9)
+│   │   ├── ansible/            # harden, docker, user       (P9)
+│   │   └── monitoring/         # prometheus, grafana, loki  (P3.5)
+│   ├── .github/workflows/ci.yml   # go lint/test/build + gitleaks
 │   ├── Dockerfile              # dev (air) / build / prod (distroless)
-│   └── .air.toml
-├── labs/                       # Dockerfile image lab + seed YAML ban đầu
-├── migrations/                 # SQL, golang-migrate
-├── deploy/
-│   ├── terraform/              # VPS, DNS, firewall
-│   ├── ansible/                # harden, docker, user deploy
-│   ├── Caddyfile               # edge proxy
-│   └── monitoring/             # prometheus.yml, grafana, loki
-├── .github/workflows/
-├── docker-compose.yml
-├── compose.prod.yml
-├── lefthook.yml
-└── Makefile
+│   ├── docker-compose.yml      # postgres + api (dev)
+│   ├── .air.toml · Makefile · lefthook.yml · .env.example
+│
+└── devforge-fe/                # REPO 2 — Vite + React (chạy standalone)
+    ├── src/{pages,components,api,hooks,context,lib}
+    │   └── pages/admin/
+    ├── .github/workflows/ci.yml   # node lint/tsc/build + gitleaks
+    ├── Dockerfile              # dev / build / prod (Caddy serve static)
+    ├── Caddyfile.static · vite.config.ts · lefthook.yml · .env.example
 ```
+
+**Vì sao polyrepo:** be/fe tách sạch theo ranh giới repo — CI riêng, deploy riêng, phân quyền riêng. `be` sở hữu orchestration (compose, DB, deploy) vì nó là hub triển khai cả stack. `fe` là app frontend thuần, dev chạy độc lập trỏ về API.
 
 ---
 
 ## 11. Chạy local
 
+Hai repo độc lập, mở **2 terminal**:
+
 ```bash
+# Terminal 1 — backend stack (postgres + api)
+cd devforge-be
 cp .env.example .env
-make up                       # postgres + api + fe + caddy
+make up                       # docker compose: postgres + api :8080
 make migrate
+npx lefthook install          # git hook (1 lần)
+
+# Terminal 2 — frontend (Vite dev, hot reload)
+cd devforge-fe
+cp .env.example .env          # VITE_API_URL=http://localhost:8080
+npm ci
+npm run dev                   # vite :5173
 npx lefthook install          # git hook (1 lần)
 ```
 
-| Cổng | Dịch vụ |
-|---|---|
-| `localhost` (:80) | Caddy — điểm vào duy nhất |
-| `localhost:5173` | Vite dev server (trực tiếp) |
-| `localhost:8080` | Go API (trực tiếp) |
-| `localhost:5432` | Postgres |
+| Cổng             | Dịch vụ                                   | Repo        |
+| ---------------- | ----------------------------------------- | ----------- |
+| `localhost:5173` | Vite dev server                           | devforge-fe |
+| `localhost:8080` | Go API (FE trỏ trực tiếp, CORS cho :5173) | devforge-be |
+| `localhost:5432` | Postgres                                  | devforge-be |
 
-Kiểm tra: `curl localhost/healthz` · `curl localhost/readyz` · `curl localhost/api/ping`
+Kiểm tra API: `curl localhost:8080/healthz` · `curl localhost:8080/readyz` · `curl localhost:8080/api/ping`
 
-`make help` xem toàn bộ lệnh.
+`make help` (trong `devforge-be`) xem toàn bộ lệnh.
 
-> Project compose đặt tên `devforge-app`, không phải `devforge` — tránh trùng volume/container với project khác cùng tên trên máy.
+> Compose đặt tên `devforge-be`, tránh trùng volume/container project khác trên máy.
+> Caddy edge (`deploy/caddy`) chỉ dùng ở **prod** (P9) — dev thì FE gọi thẳng API, không qua proxy.

@@ -1,10 +1,6 @@
 # Không đặt tên "devforge" — tránh trùng volume/container project khác.
 name: devforge-be
 
-# Polyrepo: compose này chỉ dựng backend stack (postgres + api).
-# FE chạy standalone ở repo devforge-fe: `npm run dev` → vite :5173, trỏ VITE_API_URL về :8080.
-# Caddy edge (deploy/caddy) chỉ dùng ở prod (P9).
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -22,30 +18,5 @@ services:
       timeout: 3s
       retries: 10
 
-  api:
-    build:
-      context: .
-      target: dev
-    environment:
-      APP_ENV: development
-      PORT: "8080"
-      LOG_LEVEL: debug
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_NAME: ${DB_NAME}
-      # FE standalone chạy ở :5173 (vite host).
-      CORS_ORIGINS: http://localhost:5173
-    volumes:
-      - .:/src
-      - gomod:/go/pkg/mod
-    depends_on:
-      postgres:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:8080:8080"
-
 volumes:
   pgdata:
-  gomod:

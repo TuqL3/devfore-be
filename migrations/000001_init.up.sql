@@ -1,5 +1,3 @@
--- P0: chỉ users + roles. Các bảng còn lại thêm ở P1-P7 theo lộ trình.
-
 CREATE TABLE roles (
     id   SMALLSERIAL PRIMARY KEY,
     name TEXT NOT NULL UNIQUE
@@ -22,7 +20,6 @@ CREATE TABLE users (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     CONSTRAINT users_status_check CHECK (status IN ('active', 'banned')),
-    -- Tài khoản phải đăng nhập được bằng ít nhất một cách.
     CONSTRAINT users_auth_method_check CHECK (password_hash IS NOT NULL OR google_id IS NOT NULL)
 );
 

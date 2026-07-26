@@ -10,7 +10,6 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
-// Open connects to Postgres. Schema is owned by golang-migrate, never AutoMigrate.
 func Open(dsn string, isProd bool) (*gorm.DB, error) {
 	level := gormlogger.Info
 	if isProd {
