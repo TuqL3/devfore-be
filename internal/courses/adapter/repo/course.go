@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -51,12 +52,29 @@ const courseCols = `c.id, c.slug, c.title, c.description, c.image_url, c.level, 
 	(SELECT count(*) FROM labs l WHERE l.course_id = c.id)        AS lab_count,
 	(SELECT count(*) FROM enrollments e WHERE e.course_id = c.id) AS student_count`
 
-func (r *CourseRepo) ListPublished(ctx context.Context) ([]domain.Course, error) {
+// ListPublished applies the level filter and the text search in SQL. Filtering
+// in the client only worked while every course fit in one response.
+func (r *CourseRepo) ListPublished(ctx context.Context, f domain.CourseFilter) ([]domain.Course, error) {
+	where := []string{"c.status = 'published'"}
+	args := []any{}
+	if f.Level != "" {
+		where = append(where, "c.level = ?")
+		args = append(args, f.Level)
+	}
+	if f.Query != "" {
+		// ILIKE with a leading wildcard cannot use a btree index; fine at this
+		// size, revisit with pg_trgm or tsvector when the catalogue grows.
+		where = append(where, "(c.title ILIKE ? OR c.description ILIKE ?)")
+		like := "%" + f.Query + "%"
+		args = append(args, like, like)
+	}
+
 	var rows []courseRow
 	err := r.db.WithContext(ctx).Raw(
-		`SELECT ` + courseCols + ` FROM courses c
-		 WHERE c.status = 'published'
+		`SELECT `+courseCols+` FROM courses c
+		 WHERE `+strings.Join(where, " AND ")+`
 		 ORDER BY c.published_at DESC NULLS LAST, c.id DESC`,
+		args...,
 	).Scan(&rows).Error
 	if err != nil {
 		return nil, err
@@ -64,6 +82,32 @@ func (r *CourseRepo) ListPublished(ctx context.Context) ([]domain.Course, error)
 	out := make([]domain.Course, len(rows))
 	for i, row := range rows {
 		out[i] = row.toDomain()
+	}
+	return out, nil
+}
+
+// ListLevels returns every level with how many published courses it holds, so
+// an empty level still shows up (with 0) instead of silently disappearing.
+func (r *CourseRepo) ListLevels(ctx context.Context) ([]domain.Level, error) {
+	var rows []struct {
+		Slug        string
+		Label       string
+		Hint        string
+		Rank        int
+		CourseCount int64
+	}
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT lv.slug, lv.label, lv.hint, lv.rank,
+		        (SELECT count(*) FROM courses c
+		          WHERE c.level = lv.slug AND c.status = 'published') AS course_count
+		 FROM levels lv ORDER BY lv.rank`,
+	).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.Level, len(rows))
+	for i, row := range rows {
+		out[i] = domain.Level(row)
 	}
 	return out, nil
 }
@@ -111,6 +155,13 @@ func (r *CourseRepo) Enroll(ctx context.Context, userID, courseID int64) error {
 	).Error
 }
 
+func (r *CourseRepo) Unenroll(ctx context.Context, userID, courseID int64) error {
+	return r.db.WithContext(ctx).Exec(
+		`DELETE FROM enrollments WHERE user_id = ? AND course_id = ?`,
+		userID, courseID,
+	).Error
+}
+
 func (r *CourseRepo) IsEnrolled(ctx context.Context, userID, courseID int64) (bool, error) {
 	var n int64
 	err := r.db.WithContext(ctx).Table("enrollments").
@@ -118,6 +169,17 @@ func (r *CourseRepo) IsEnrolled(ctx context.Context, userID, courseID int64) (bo
 	return n > 0, err
 }
 
+// Leaderboard reads course_scores; ties break on username so the order is
+// stable between calls instead of whatever the planner returns.
 func (r *CourseRepo) Leaderboard(ctx context.Context, courseID int64) ([]domain.LeaderRow, error) {
-	return []domain.LeaderRow{}, nil
+	rows := []domain.LeaderRow{}
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT u.username, u.avatar_url, cs.score, cs.labs_completed, cs.attempts, cs.updated_at
+		 FROM course_scores cs
+		 JOIN users u ON u.id = cs.user_id
+		 WHERE cs.course_id = ?
+		 ORDER BY cs.score DESC, u.username
+		 LIMIT 50`, courseID,
+	).Scan(&rows).Error
+	return rows, err
 }

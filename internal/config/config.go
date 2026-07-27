@@ -27,6 +27,10 @@ type Config struct {
 	GoogleClientSecret string        `env:"GOOGLE_CLIENT_SECRET"`
 	GoogleRedirectURL  string        `env:"GOOGLE_REDIRECT_URL" envDefault:"http://localhost:8080/api/auth/google/callback"`
 	FrontendURL        string        `env:"FRONTEND_URL" envDefault:"http://localhost:5173"`
+
+	UploadDir string `env:"UPLOAD_DIR" envDefault:"./uploads"`
+	// Absolute base the browser uses to fetch uploaded files.
+	PublicURL string `env:"PUBLIC_URL" envDefault:"http://localhost:8080"`
 }
 
 func Load() (*Config, error) {

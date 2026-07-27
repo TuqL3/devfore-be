@@ -130,6 +130,59 @@ func (r *UserRepo) UsernameTaken(ctx context.Context, name string) (bool, error)
 	return n > 0, err
 }
 
+// UpdateProfile writes the user-editable fields. The unique indexes on
+// username/email are the source of truth, so a race between two updates still
+// ends in ErrConflict rather than a duplicate.
+func (r *UserRepo) UpdateProfile(ctx context.Context, id int64, username, email string, avatarURL *string) error {
+	fields := map[string]any{
+		"username":   username,
+		"email":      email,
+		"updated_at": time.Now(),
+	}
+	// nil means "leave the avatar alone"; an empty string clears it.
+	if avatarURL != nil {
+		if *avatarURL == "" {
+			fields["avatar_url"] = nil
+		} else {
+			fields["avatar_url"] = *avatarURL
+		}
+	}
+	err := r.db.WithContext(ctx).Table("users").Where("id = ?", id).Updates(fields).Error
+	if isUniqueViolation(err) {
+		return domain.ErrConflict
+	}
+	return err
+}
+
+func (r *UserRepo) UpdateAvatar(ctx context.Context, id int64, url string) error {
+	return r.db.WithContext(ctx).Table("users").Where("id = ?", id).
+		Updates(map[string]any{"avatar_url": url, "updated_at": time.Now()}).Error
+}
+
+func (r *UserRepo) UpdatePassword(ctx context.Context, id int64, hash string) error {
+	return r.db.WithContext(ctx).Table("users").Where("id = ?", id).
+		Updates(map[string]any{"password_hash": hash, "updated_at": time.Now()}).Error
+}
+
+// Delete removes the row for good. user_roles and enrollments cascade, but
+// users.banned_by references users(id) without a cascade rule, so those
+// pointers have to be cleared first or the delete is blocked.
+func (r *UserRepo) Delete(ctx context.Context, id int64) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`UPDATE users SET banned_by = NULL WHERE banned_by = ?`, id).Error; err != nil {
+			return err
+		}
+		res := tx.Exec(`DELETE FROM users WHERE id = ?`, id)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return domain.ErrNotFound
+		}
+		return nil
+	})
+}
+
 func (r *UserRepo) LinkGoogle(ctx context.Context, id int64, googleID, avatarURL string) error {
 	return r.db.WithContext(ctx).Table("users").Where("id = ?", id).
 		Updates(map[string]any{"google_id": googleID, "avatar_url": avatarURL, "updated_at": time.Now()}).Error

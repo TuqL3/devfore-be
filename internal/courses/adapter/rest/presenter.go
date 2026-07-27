@@ -96,14 +96,44 @@ func newReviewList(rs []domain.Review) []reviewResponse {
 }
 
 type leaderRow struct {
-	Username string `json:"username"`
-	Score    int    `json:"score"`
+	// Rank is assigned by the query order, so the client never re-sorts.
+	Rank          int       `json:"rank"`
+	Username      string    `json:"username"`
+	AvatarURL     *string   `json:"avatar_url"`
+	Score         int       `json:"score"`
+	LabsCompleted int       `json:"labs_completed"`
+	Attempts      int       `json:"attempts"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func newLeaderboard(rows []domain.LeaderRow) []leaderRow {
 	out := make([]leaderRow, len(rows))
 	for i, r := range rows {
-		out[i] = leaderRow{Username: r.Username, Score: r.Score}
+		out[i] = leaderRow{
+			Rank:          i + 1,
+			Username:      r.Username,
+			AvatarURL:     r.AvatarURL,
+			Score:         r.Score,
+			LabsCompleted: r.LabsCompleted,
+			Attempts:      r.Attempts,
+			UpdatedAt:     r.UpdatedAt,
+		}
+	}
+	return out
+}
+
+type levelResponse struct {
+	Slug        string `json:"slug"`
+	Label       string `json:"label"`
+	Hint        string `json:"hint"`
+	Rank        int    `json:"rank"`
+	CourseCount int64  `json:"course_count"`
+}
+
+func newLevelList(levels []domain.Level) []levelResponse {
+	out := make([]levelResponse, len(levels))
+	for i, l := range levels {
+		out[i] = levelResponse(l)
 	}
 	return out
 }

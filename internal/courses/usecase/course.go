@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"strings"
 
 	"github.com/devforge/be/internal/courses/domain"
 )
@@ -14,8 +15,13 @@ func NewCourses(repo CourseRepository) *Courses {
 	return &Courses{repo: repo}
 }
 
-func (c *Courses) List(ctx context.Context) ([]domain.Course, error) {
-	return c.repo.ListPublished(ctx)
+func (c *Courses) List(ctx context.Context, f domain.CourseFilter) ([]domain.Course, error) {
+	f.Query = strings.TrimSpace(f.Query)
+	return c.repo.ListPublished(ctx, f)
+}
+
+func (c *Courses) Levels(ctx context.Context) ([]domain.Level, error) {
+	return c.repo.ListLevels(ctx)
 }
 
 func (c *Courses) Detail(ctx context.Context, slug string, userID int64) (*domain.Course, error) {
@@ -44,6 +50,14 @@ func (c *Courses) Enroll(ctx context.Context, userID int64, slug string) error {
 		return err
 	}
 	return c.repo.Enroll(ctx, userID, course.ID)
+}
+
+func (c *Courses) Unenroll(ctx context.Context, userID int64, slug string) error {
+	course, err := c.repo.BySlug(ctx, slug)
+	if err != nil {
+		return err
+	}
+	return c.repo.Unenroll(ctx, userID, course.ID)
 }
 
 func (c *Courses) Reviews(ctx context.Context, slug string) ([]domain.Review, error) {

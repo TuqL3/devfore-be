@@ -8,6 +8,13 @@ type RegisterInput struct {
 	Password string
 }
 
+type UpdateProfileInput struct {
+	Username string
+	Email    string
+	// nil leaves the current avatar untouched; "" clears it.
+	AvatarURL *string
+}
+
 type LoginInput struct {
 	Login    string
 	Password string

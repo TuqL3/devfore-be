@@ -22,6 +22,8 @@ type Config struct {
 	GoogleClientSecret string
 	GoogleRedirectURL  string
 	FrontendURL        string
+	UploadDir          string
+	PublicURL          string
 }
 
 type Module struct {
@@ -38,7 +40,7 @@ func New(db *gorm.DB, cfg Config) *Module {
 	uc := usecase.NewAuth(users, tokens, hasher, google)
 
 	return &Module{
-		handler: rest.NewHandler(uc, cfg.FrontendURL),
+		handler: rest.NewHandler(uc, cfg.FrontendURL, cfg.UploadDir, cfg.PublicURL),
 		mw:      rest.NewMiddleware(uc),
 	}
 }
@@ -56,4 +58,8 @@ func (m *Module) Routes(api *gin.RouterGroup) {
 	g.GET("/google/callback", h.GoogleCallback)
 
 	api.GET("/me", m.mw.Required(), h.Me)
+	api.PATCH("/me", m.mw.Required(), h.UpdateMe)
+	api.PATCH("/me/password", m.mw.Required(), h.ChangePassword)
+	api.DELETE("/me", m.mw.Required(), h.DeleteMe)
+	api.POST("/me/avatar", m.mw.Required(), h.UploadAvatar)
 }

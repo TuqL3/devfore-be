@@ -14,6 +14,10 @@ type UserRepository interface {
 	ByLogin(ctx context.Context, login string) (*domain.User, error)
 	LinkGoogle(ctx context.Context, id int64, googleID, avatarURL string) error
 	UsernameTaken(ctx context.Context, name string) (bool, error)
+	UpdateProfile(ctx context.Context, id int64, username, email string, avatarURL *string) error
+	UpdatePassword(ctx context.Context, id int64, hash string) error
+	UpdateAvatar(ctx context.Context, id int64, url string) error
+	Delete(ctx context.Context, id int64) error
 }
 
 type TokenIssuer interface {

@@ -19,12 +19,24 @@ func NewHandler(uc *usecase.Courses) *Handler {
 }
 
 func (h *Handler) List(c *gin.Context) {
-	items, err := h.uc.List(c.Request.Context())
+	items, err := h.uc.List(c.Request.Context(), domain.CourseFilter{
+		Level: c.Query("level"),
+		Query: c.Query("q"),
+	})
 	if err != nil {
 		serverError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, newSummaryList(items))
+}
+
+func (h *Handler) Levels(c *gin.Context) {
+	levels, err := h.uc.Levels(c.Request.Context())
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, newLevelList(levels))
 }
 
 func (h *Handler) Detail(c *gin.Context) {
@@ -42,6 +54,19 @@ func (h *Handler) Detail(c *gin.Context) {
 
 func (h *Handler) Enroll(c *gin.Context) {
 	err := h.uc.Enroll(c.Request.Context(), userID(c), c.Param("slug"))
+	if errors.Is(err, domain.ErrNotFound) {
+		abort(c, http.StatusNotFound, "khoá học không tồn tại")
+		return
+	}
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (h *Handler) Unenroll(c *gin.Context) {
+	err := h.uc.Unenroll(c.Request.Context(), userID(c), c.Param("slug"))
 	if errors.Is(err, domain.ErrNotFound) {
 		abort(c, http.StatusNotFound, "khoá học không tồn tại")
 		return

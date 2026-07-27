@@ -15,10 +15,17 @@ import (
 type Handler struct {
 	auth        *usecase.Auth
 	frontendURL string
+	uploadDir   string
+	publicURL   string
 }
 
-func NewHandler(auth *usecase.Auth, frontendURL string) *Handler {
-	return &Handler{auth: auth, frontendURL: frontendURL}
+func NewHandler(auth *usecase.Auth, frontendURL, uploadDir, publicURL string) *Handler {
+	return &Handler{
+		auth:        auth,
+		frontendURL: frontendURL,
+		uploadDir:   uploadDir,
+		publicURL:   publicURL,
+	}
 }
 
 func (h *Handler) Register(c *gin.Context) {
@@ -76,6 +83,64 @@ func (h *Handler) Me(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, newUserResponse(u))
+}
+
+func (h *Handler) UpdateMe(c *gin.Context) {
+	var req updateProfileRequest
+	if !bind(c, &req) {
+		return
+	}
+	u, err := h.auth.UpdateProfile(c.Request.Context(), UserID(c), usecase.UpdateProfileInput{
+		Username:  req.Username,
+		Email:     req.Email,
+		AvatarURL: req.AvatarURL,
+	})
+	switch {
+	case errors.Is(err, domain.ErrConflict):
+		abort(c, http.StatusConflict, "username hoặc email đã được dùng")
+	case errors.Is(err, domain.ErrNotFound):
+		abort(c, http.StatusNotFound, "user không tồn tại")
+	case err != nil:
+		serverError(c, err)
+	default:
+		c.JSON(http.StatusOK, newUserResponse(u))
+	}
+}
+
+func (h *Handler) ChangePassword(c *gin.Context) {
+	var req changePasswordRequest
+	if !bind(c, &req) {
+		return
+	}
+	err := h.auth.ChangePassword(c.Request.Context(), UserID(c), req.CurrentPassword, req.NewPassword)
+	switch {
+	case errors.Is(err, domain.ErrCredentials):
+		abort(c, http.StatusForbidden, "mật khẩu hiện tại không đúng")
+	case errors.Is(err, domain.ErrNotFound):
+		abort(c, http.StatusNotFound, "user không tồn tại")
+	case err != nil:
+		serverError(c, err)
+	default:
+		c.Status(http.StatusNoContent)
+	}
+}
+
+func (h *Handler) DeleteMe(c *gin.Context) {
+	var req deleteAccountRequest
+	if !bind(c, &req) {
+		return
+	}
+	err := h.auth.DeleteAccount(c.Request.Context(), UserID(c), req.Password)
+	switch {
+	case errors.Is(err, domain.ErrCredentials):
+		abort(c, http.StatusForbidden, "mật khẩu không đúng")
+	case errors.Is(err, domain.ErrNotFound):
+		abort(c, http.StatusNotFound, "user không tồn tại")
+	case err != nil:
+		serverError(c, err)
+	default:
+		c.Status(http.StatusNoContent)
+	}
 }
 
 const oauthStateCookie = "df_oauth_state"

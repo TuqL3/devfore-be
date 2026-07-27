@@ -20,6 +20,8 @@ func New(db *gorm.DB) *Module {
 
 func (m *Module) Routes(api *gin.RouterGroup, required, optional gin.HandlerFunc) {
 	h := m.handler
+	api.GET("/levels", h.Levels)
+
 	g := api.Group("/courses")
 	g.GET("", h.List)
 	g.GET("/:slug", optional, h.Detail)
@@ -27,4 +29,5 @@ func (m *Module) Routes(api *gin.RouterGroup, required, optional gin.HandlerFunc
 	g.GET("/:slug/leaderboard", h.Leaderboard)
 	g.GET("/:slug/status", optional, h.Status)
 	g.POST("/:slug/enroll", required, h.Enroll)
+	g.DELETE("/:slug/enroll", required, h.Unenroll)
 }

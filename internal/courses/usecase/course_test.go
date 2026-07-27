@@ -13,7 +13,10 @@ type fakeRepo struct {
 	enrolled bool
 }
 
-func (f *fakeRepo) ListPublished(context.Context) ([]domain.Course, error) { return nil, nil }
+func (f *fakeRepo) ListPublished(context.Context, domain.CourseFilter) ([]domain.Course, error) {
+	return nil, nil
+}
+func (f *fakeRepo) ListLevels(context.Context) ([]domain.Level, error) { return nil, nil }
 func (f *fakeRepo) BySlug(_ context.Context, slug string) (*domain.Course, error) {
 	if f.course == nil || f.course.Slug != slug {
 		return nil, domain.ErrNotFound
@@ -24,6 +27,7 @@ func (f *fakeRepo) BySlug(_ context.Context, slug string) (*domain.Course, error
 func (f *fakeRepo) LabsByCourse(context.Context, int64) ([]domain.Lab, error) { return f.labs, nil }
 func (f *fakeRepo) Reviews(context.Context, int64) ([]domain.Review, error)   { return nil, nil }
 func (f *fakeRepo) Enroll(context.Context, int64, int64) error                { return nil }
+func (f *fakeRepo) Unenroll(context.Context, int64, int64) error              { return nil }
 func (f *fakeRepo) IsEnrolled(context.Context, int64, int64) (bool, error)    { return f.enrolled, nil }
 func (f *fakeRepo) Leaderboard(context.Context, int64) ([]domain.LeaderRow, error) {
 	return nil, nil
