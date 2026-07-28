@@ -7,7 +7,7 @@ import (
 	"github.com/devforge/be/internal/auth/domain"
 )
 
-func (a *Auth) Register(ctx context.Context, in RegisterInput) (AuthOutput, error) {
+func (a *Auth) Register(ctx context.Context, in RegisterInput, meta SessionMeta) (AuthOutput, error) {
 	hash, err := a.hasher.Hash(in.Password)
 	if err != nil {
 		return AuthOutput{}, err
@@ -22,6 +22,5 @@ func (a *Auth) Register(ctx context.Context, in RegisterInput) (AuthOutput, erro
 		return AuthOutput{}, err
 	}
 	u.Roles = []string{domain.RoleStudent}
-	tp, err := a.tokens.Issue(u.ID, u.Roles)
-	return AuthOutput{Tokens: tp, User: u}, err
+	return a.start(ctx, u, meta)
 }

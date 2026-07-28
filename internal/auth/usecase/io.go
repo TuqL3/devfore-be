@@ -21,8 +21,8 @@ type LoginInput struct {
 }
 
 type AuthOutput struct {
-	Tokens domain.TokenPair
-	User   *domain.User
+	Credentials domain.Credentials
+	User        *domain.User
 }
 
 type GoogleProfile struct {

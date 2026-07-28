@@ -8,7 +8,7 @@ import (
 	"github.com/devforge/be/internal/auth/domain"
 )
 
-func (a *Auth) Login(ctx context.Context, in LoginInput) (AuthOutput, error) {
+func (a *Auth) Login(ctx context.Context, in LoginInput, meta SessionMeta) (AuthOutput, error) {
 	u, err := a.users.ByLogin(ctx, strings.ToLower(in.Login))
 	if errors.Is(err, domain.ErrNotFound) {
 		return AuthOutput{}, domain.ErrCredentials
@@ -22,6 +22,5 @@ func (a *Auth) Login(ctx context.Context, in LoginInput) (AuthOutput, error) {
 	if u.IsBanned() {
 		return AuthOutput{}, domain.ErrBanned
 	}
-	tp, err := a.tokens.Issue(u.ID, u.Roles)
-	return AuthOutput{Tokens: tp, User: u}, err
+	return a.start(ctx, u, meta)
 }
