@@ -52,8 +52,6 @@ const courseCols = `c.id, c.slug, c.title, c.description, c.image_url, c.level, 
 	(SELECT count(*) FROM labs l WHERE l.course_id = c.id)        AS lab_count,
 	(SELECT count(*) FROM enrollments e WHERE e.course_id = c.id) AS student_count`
 
-// ListPublished applies the level filter and the text search in SQL. Filtering
-// in the client only worked while every course fit in one response.
 func (r *CourseRepo) ListPublished(ctx context.Context, f domain.CourseFilter) ([]domain.Course, error) {
 	where := []string{"c.status = 'published'"}
 	args := []any{}
@@ -62,8 +60,6 @@ func (r *CourseRepo) ListPublished(ctx context.Context, f domain.CourseFilter) (
 		args = append(args, f.Level)
 	}
 	if f.Query != "" {
-		// ILIKE with a leading wildcard cannot use a btree index; fine at this
-		// size, revisit with pg_trgm or tsvector when the catalogue grows.
 		where = append(where, "(c.title ILIKE ? OR c.description ILIKE ?)")
 		like := "%" + f.Query + "%"
 		args = append(args, like, like)
@@ -86,8 +82,6 @@ func (r *CourseRepo) ListPublished(ctx context.Context, f domain.CourseFilter) (
 	return out, nil
 }
 
-// ListLevels returns every level with how many published courses it holds, so
-// an empty level still shows up (with 0) instead of silently disappearing.
 func (r *CourseRepo) ListLevels(ctx context.Context) ([]domain.Level, error) {
 	var rows []struct {
 		Slug        string
@@ -169,8 +163,6 @@ func (r *CourseRepo) IsEnrolled(ctx context.Context, userID, courseID int64) (bo
 	return n > 0, err
 }
 
-// Leaderboard reads course_scores; ties break on username so the order is
-// stable between calls instead of whatever the planner returns.
 func (r *CourseRepo) Leaderboard(ctx context.Context, courseID int64) ([]domain.LeaderRow, error) {
 	rows := []domain.LeaderRow{}
 	err := r.db.WithContext(ctx).Raw(

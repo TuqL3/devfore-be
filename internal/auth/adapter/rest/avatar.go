@@ -18,8 +18,6 @@ const (
 	avatarField    = "file"
 )
 
-// Only these are accepted, and the type is decided by sniffing the bytes —
-// never by the filename or the client's Content-Type header.
 var avatarExt = map[string]string{
 	"image/png":  ".png",
 	"image/jpeg": ".jpg",
@@ -27,9 +25,6 @@ var avatarExt = map[string]string{
 	"image/webp": ".webp",
 }
 
-// UploadAvatar stores an image under UploadDir with a generated name and points
-// the user's avatar_url at it. The uploaded filename is never used on disk: it
-// is attacker-controlled and could contain path separators or a script suffix.
 func (h *Handler) UploadAvatar(c *gin.Context) {
 	if h.uploadDir == "" {
 		abort(c, http.StatusNotImplemented, "chưa cấu hình nơi lưu ảnh")

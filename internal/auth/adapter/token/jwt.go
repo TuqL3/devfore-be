@@ -12,8 +12,6 @@ import (
 
 var _ usecase.TokenIssuer = (*JWT)(nil)
 
-// Refresh tokens are no longer signed blobs — they are session ids held in
-// Redis — so "access" is the only type this ever mints or accepts.
 const typeAccess = "access"
 
 type claims struct {

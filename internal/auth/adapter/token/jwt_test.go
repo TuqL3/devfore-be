@@ -25,8 +25,6 @@ func TestAccessTokenRoundTrip(t *testing.T) {
 	if len(roles) != 1 || roles[0] != "student" {
 		t.Fatalf("roles = %v", roles)
 	}
-	// The session id has to survive the round trip, or "sign out the other
-	// devices" would have no way to spare the device that asked.
 	if sid != "sess-1" {
 		t.Fatalf("session id = %q, want sess-1", sid)
 	}
@@ -45,8 +43,6 @@ func TestExpiredTokenRejected(t *testing.T) {
 	}
 }
 
-// A token signed with any other "typ" must not pass as an access token, so a
-// future token kind can never be replayed against the middleware.
 func TestForeignTokenTypeRejected(t *testing.T) {
 	ts := NewJWT("s", time.Minute)
 	foreign, err := ts.sign(1, "something-else", nil, "s1", time.Minute)

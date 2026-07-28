@@ -96,7 +96,6 @@ func newReviewList(rs []domain.Review) []reviewResponse {
 }
 
 type leaderRow struct {
-	// Rank is assigned by the query order, so the client never re-sorts.
 	Rank          int       `json:"rank"`
 	Username      string    `json:"username"`
 	AvatarURL     *string   `json:"avatar_url"`

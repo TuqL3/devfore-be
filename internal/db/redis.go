@@ -9,9 +9,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// OpenRedis dials and verifies the connection up front. Refresh sessions live
-// in Redis, so a server that cannot reach it cannot authenticate anyone —
-// better to fail at boot than to fail every login.
 func OpenRedis(addr, password string, database int) (*redis.Client, error) {
 	c := redis.NewClient(&redis.Options{
 		Addr:     addr,

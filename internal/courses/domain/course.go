@@ -18,9 +18,6 @@ type Course struct {
 	Labs         []Lab
 }
 
-// Level is the difficulty tier a course belongs to. Rank drives ordering and
-// the difficulty meter in the UI.
-// CourseFilter carries the query params the list endpoint accepts.
 type CourseFilter struct {
 	Level string
 	Query string
