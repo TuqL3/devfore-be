@@ -15,7 +15,7 @@ func (a *Auth) OAuthEnabled() bool { return a.oauth.Enabled() }
 
 func (a *Auth) OAuthURL(state string) string { return a.oauth.AuthCodeURL(state) }
 
-func (a *Auth) AuthenticateGoogle(ctx context.Context, code string) (AuthOutput, error) {
+func (a *Auth) AuthenticateGoogle(ctx context.Context, code string, meta SessionMeta) (AuthOutput, error) {
 	p, err := a.oauth.Exchange(ctx, code)
 	if err != nil {
 		return AuthOutput{}, err
@@ -27,8 +27,7 @@ func (a *Auth) AuthenticateGoogle(ctx context.Context, code string) (AuthOutput,
 	if u.IsBanned() {
 		return AuthOutput{}, domain.ErrBanned
 	}
-	tp, err := a.tokens.Issue(u.ID, u.Roles)
-	return AuthOutput{Tokens: tp, User: u}, err
+	return a.start(ctx, u, meta)
 }
 
 func (a *Auth) upsertGoogle(ctx context.Context, p GoogleProfile) (*domain.User, error) {

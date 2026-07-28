@@ -3,7 +3,6 @@ package rest
 import (
 	"net/http"
 	"slices"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -11,8 +10,9 @@ import (
 )
 
 const (
-	ctxUserID = "user_id"
-	ctxRoles  = "roles"
+	ctxUserID    = "user_id"
+	ctxRoles     = "roles"
+	ctxSessionID = "session_id"
 )
 
 type Middleware struct {
@@ -25,28 +25,30 @@ func NewMiddleware(auth *usecase.Auth) *Middleware {
 
 func (m *Middleware) Required() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		token := bearer(c)
+		token := cookie(c, accessCookie)
 		if token == "" {
 			abort(c, http.StatusUnauthorized, "missing token")
 			return
 		}
-		id, roles, err := m.auth.Authorize(token)
+		id, roles, sid, err := m.auth.Authorize(token)
 		if err != nil {
 			abort(c, http.StatusUnauthorized, "invalid token")
 			return
 		}
 		c.Set(ctxUserID, id)
 		c.Set(ctxRoles, roles)
+		c.Set(ctxSessionID, sid)
 		c.Next()
 	}
 }
 
 func (m *Middleware) Optional() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if token := bearer(c); token != "" {
-			if id, roles, err := m.auth.Authorize(token); err == nil {
+		if token := cookie(c, accessCookie); token != "" {
+			if id, roles, sid, err := m.auth.Authorize(token); err == nil {
 				c.Set(ctxUserID, id)
 				c.Set(ctxRoles, roles)
+				c.Set(ctxSessionID, sid)
 			}
 		}
 		c.Next()
@@ -69,12 +71,4 @@ func UserID(c *gin.Context) int64 {
 	v, _ := c.Get(ctxUserID)
 	id, _ := v.(int64)
 	return id
-}
-
-func bearer(c *gin.Context) string {
-	h := c.GetHeader("Authorization")
-	if after, ok := strings.CutPrefix(h, "Bearer "); ok {
-		return after
-	}
-	return ""
 }

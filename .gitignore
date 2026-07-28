@@ -3,7 +3,7 @@
 
 # Go
 tmp/
-server
+# server
 
 # Editor
 .DS_Store

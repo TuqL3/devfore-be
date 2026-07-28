@@ -36,7 +36,3 @@ type loginRequest struct {
 func (r loginRequest) toInput() usecase.LoginInput {
 	return usecase.LoginInput{Login: r.Login, Password: r.Password}
 }
-
-type refreshRequest struct {
-	RefreshToken string `json:"refresh_token" binding:"required"`
-}

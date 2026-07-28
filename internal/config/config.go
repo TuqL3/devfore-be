@@ -18,7 +18,16 @@ type Config struct {
 	DBPass string `env:"DB_PASSWORD,required"`
 	DBName string `env:"DB_NAME,required"`
 
+	// Refresh sessions live here, so the API cannot serve logins without it.
+	RedisAddr string `env:"REDIS_ADDR" envDefault:"localhost:6379"`
+	RedisPass string `env:"REDIS_PASSWORD"`
+	RedisDB   int    `env:"REDIS_DB" envDefault:"0"`
+
 	CORSOrigins []string `env:"CORS_ORIGINS" envSeparator:","`
+
+	// Only needed when the cookie has to span subdomains; empty means
+	// host-only, which is the safer default.
+	CookieDomain string `env:"COOKIE_DOMAIN"`
 
 	JWTSecret          string        `env:"JWT_SECRET,required"`
 	AccessTTL          time.Duration `env:"ACCESS_TTL" envDefault:"15m"`

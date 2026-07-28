@@ -4,12 +4,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
 	"github.com/devforge/be/internal/auth/adapter/hash"
 	"github.com/devforge/be/internal/auth/adapter/oauthgoogle"
 	"github.com/devforge/be/internal/auth/adapter/repo"
 	"github.com/devforge/be/internal/auth/adapter/rest"
+	"github.com/devforge/be/internal/auth/adapter/session"
 	"github.com/devforge/be/internal/auth/adapter/token"
 	"github.com/devforge/be/internal/auth/usecase"
 )
@@ -24,6 +26,8 @@ type Config struct {
 	FrontendURL        string
 	UploadDir          string
 	PublicURL          string
+	CookieDomain       string
+	CookieSecure       bool
 }
 
 type Module struct {
@@ -31,16 +35,18 @@ type Module struct {
 	mw      *rest.Middleware
 }
 
-func New(db *gorm.DB, cfg Config) *Module {
+func New(db *gorm.DB, rdb *redis.Client, cfg Config) *Module {
 	users := repo.NewUserRepo(db)
-	tokens := token.NewJWT(cfg.JWTSecret, cfg.AccessTTL, cfg.RefreshTTL)
+	tokens := token.NewJWT(cfg.JWTSecret, cfg.AccessTTL)
+	sessions := session.New(rdb, cfg.RefreshTTL)
 	hasher := hash.Bcrypt{}
 	google := oauthgoogle.New(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL)
 
-	uc := usecase.NewAuth(users, tokens, hasher, google)
+	uc := usecase.NewAuth(users, tokens, hasher, google, sessions)
+	cookies := rest.CookieConfig{Domain: cfg.CookieDomain, Secure: cfg.CookieSecure}
 
 	return &Module{
-		handler: rest.NewHandler(uc, cfg.FrontendURL, cfg.UploadDir, cfg.PublicURL),
+		handler: rest.NewHandler(uc, cfg.FrontendURL, cfg.UploadDir, cfg.PublicURL, cookies),
 		mw:      rest.NewMiddleware(uc),
 	}
 }
@@ -54,6 +60,13 @@ func (m *Module) Routes(api *gin.RouterGroup) {
 	g.POST("/register", h.Register)
 	g.POST("/login", h.Login)
 	g.POST("/refresh", h.Refresh)
+	// Ending this browser's session needs no valid access token — an expired
+	// one is the most likely reason someone is signing out in the first place.
+	g.POST("/logout", h.Logout)
+	// Ending every session does, because it can strand every other device.
+	g.POST("/logout-all", m.mw.Required(), h.LogoutAll)
+	g.GET("/sessions", m.mw.Required(), h.Sessions)
+	g.DELETE("/sessions/:id", m.mw.Required(), h.RevokeSession)
 	g.GET("/google", h.GoogleLogin)
 	g.GET("/google/callback", h.GoogleCallback)
 

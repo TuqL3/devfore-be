@@ -12,65 +12,49 @@ import (
 
 var _ usecase.TokenIssuer = (*JWT)(nil)
 
-const (
-	typeAccess  = "access"
-	typeRefresh = "refresh"
-)
+// Refresh tokens are no longer signed blobs — they are session ids held in
+// Redis — so "access" is the only type this ever mints or accepts.
+const typeAccess = "access"
 
 type claims struct {
-	Type  string   `json:"typ"`
-	Roles []string `json:"roles,omitempty"`
+	Type      string   `json:"typ"`
+	Roles     []string `json:"roles,omitempty"`
+	SessionID string   `json:"sid,omitempty"`
 	jwt.RegisteredClaims
 }
 
 type JWT struct {
-	secret     []byte
-	accessTTL  time.Duration
-	refreshTTL time.Duration
+	secret    []byte
+	accessTTL time.Duration
 }
 
-func NewJWT(secret string, accessTTL, refreshTTL time.Duration) *JWT {
-	return &JWT{secret: []byte(secret), accessTTL: accessTTL, refreshTTL: refreshTTL}
+func NewJWT(secret string, accessTTL time.Duration) *JWT {
+	return &JWT{secret: []byte(secret), accessTTL: accessTTL}
 }
 
-func (j *JWT) Issue(userID int64, roles []string) (domain.TokenPair, error) {
-	access, err := j.sign(userID, typeAccess, roles, j.accessTTL)
+func (j *JWT) IssueAccess(userID int64, roles []string, sessionID string) (string, time.Duration, error) {
+	access, err := j.sign(userID, typeAccess, roles, sessionID, j.accessTTL)
 	if err != nil {
-		return domain.TokenPair{}, err
+		return "", 0, err
 	}
-	refresh, err := j.sign(userID, typeRefresh, nil, j.refreshTTL)
-	if err != nil {
-		return domain.TokenPair{}, err
-	}
-	return domain.TokenPair{
-		AccessToken:  access,
-		RefreshToken: refresh,
-		ExpiresIn:    int64(j.accessTTL.Seconds()),
-	}, nil
+	return access, j.accessTTL, nil
 }
 
-func (j *JWT) ParseAccess(token string) (int64, []string, error) {
+func (j *JWT) ParseAccess(token string) (int64, []string, string, error) {
 	c, err := j.parse(token, typeAccess)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, "", err
 	}
 	id, err := userID(c)
-	return id, c.Roles, err
+	return id, c.Roles, c.SessionID, err
 }
 
-func (j *JWT) ParseRefresh(token string) (int64, error) {
-	c, err := j.parse(token, typeRefresh)
-	if err != nil {
-		return 0, err
-	}
-	return userID(c)
-}
-
-func (j *JWT) sign(uid int64, typ string, roles []string, ttl time.Duration) (string, error) {
+func (j *JWT) sign(uid int64, typ string, roles []string, sessionID string, ttl time.Duration) (string, error) {
 	now := time.Now()
 	c := claims{
-		Type:  typ,
-		Roles: roles,
+		Type:      typ,
+		Roles:     roles,
+		SessionID: sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   fmt.Sprintf("%d", uid),
 			IssuedAt:  jwt.NewNumericDate(now),

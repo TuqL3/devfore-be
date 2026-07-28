@@ -59,7 +59,9 @@ Không dùng: Next.js, Redux, Zustand, axios, dayjs, i18n, Storybook.
 | Validate   | go-playground/validator                           |
 | Test       | stdlib testing + testcontainers-go                |
 
-Không dùng: Redis, gRPC, message queue, DI framework.
+Redis giữ **duy nhất** refresh session (xem [Phiên đăng nhập](#phiên-đăng-nhập)) — mất volume Redis = mọi người phải đăng nhập lại, không mất dữ liệu gì khác.
+
+Không dùng: gRPC, message queue, DI framework.
 
 ### Dữ liệu
 
@@ -188,7 +190,11 @@ POST   /api/auth/register              {username, email, password}
 POST   /api/auth/login
 GET    /api/auth/google                → redirect OAuth
 GET    /api/auth/google/callback
-POST   /api/auth/refresh
+POST   /api/auth/refresh               → xoay session, không body, không trả token
+POST   /api/auth/logout                → thoát máy này
+POST   /api/auth/logout-all            → thoát mọi thiết bị (cần access token)
+GET    /api/auth/sessions              → thiết bị đang đăng nhập, mới nhất trước
+DELETE /api/auth/sessions/:id          → thoát 1 thiết bị (chỉ phiên của chính mình)
 GET    /api/me
 
 GET    /api/courses                    → chỉ status=published
@@ -266,6 +272,24 @@ Traffic web xem ở Umami, metrics hệ thống ở Grafana. Dashboard admin ch�
 
 ## 7. Bảo mật
 
+### Phiên đăng nhập
+
+Không token nào chạm tới JavaScript. Đăng nhập trả về **user**, phần chứng thực đi bằng 2 cookie `HttpOnly`:
+
+| Cookie       | Là gì                        | Path        | Sống  |
+| ------------ | ---------------------------- | ----------- | ----- |
+| `df_access`  | JWT ngắn hạn, mang `sid`     | `/`         | 15m   |
+| `df_session` | id session ngẫu nhiên 256bit | `/api/auth` | 168h  |
+
+- **Refresh là tra Redis, không phải kiểm chữ ký** — nên thu hồi được. Đó là toàn bộ lý do refresh không còn là JWT.
+- **Xoay vòng mỗi lần refresh**: id cũ chết ngay. Cookie bị trộm chỉ dùng được tới lần refresh kế tiếp của máy thật.
+- **Khoá `usess:<uid>`** là set id session của một user → `logout-all` là một lần đọc set, không quét keyspace.
+- **Đổi mật khẩu** đá mọi thiết bị *khác*, giữ lại thiết bị vừa thao tác (`sid` nằm trong access token nên biết được đâu là phiên hiện tại).
+- **Chống CSRF 2 lớp**: `SameSite=Lax` trên cookie, cộng với chặn ở tầng HTTP — request đổi trạng thái mà `Origin` không thuộc `CORS_ORIGINS` và không same-origin → 403.
+- **Màn hình thiết bị** (`GET /api/auth/sessions`): `sess:<id>` là hash chứa `uid`, `ua`, `ip`, `created`, `seen`. Refresh xoay id nhưng **khiêng `created` sang phiên mới** — nếu không, mọi thiết bị sẽ luôn báo "vừa đăng nhập". `DELETE /api/auth/sessions/:id` kiểm chủ sở hữu và trả **404** khi id thuộc người khác — báo 403 tức là xác nhận id đó có thật.
+- Thu hồi phiên chỉ chặn được **refresh**. Access token đã ký vẫn sống tới hết 15 phút — cái giá của việc không tra DB mỗi request.
+- `Secure` bật theo `APP_ENV=production`; local không có TLS nên cookie `Secure` sẽ không được lưu.
+
 ### Sandbox lab
 
 Container do học viên gõ lệnh = code lạ chạy trên máy chủ. Bắt buộc:
@@ -317,6 +341,8 @@ Rollback = trỏ về image tag SHA cũ, không revert code rồi build lại.
 | `LOG_LEVEL`                                   | debug                   | info                   | compose    |
 | `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_NAME` | (compose)               | (compose)              | compose    |
 | `DB_PASSWORD`                                 | `.env` giả              | SOPS / GitHub Secrets  | **secret** |
+| `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB`  | localhost:6379          | (compose)              | compose    |
+| `COOKIE_DOMAIN`                               | (rỗng)                  | (rỗng)                 | compose    |
 | `JWT_SECRET`                                  | `.env` giả              | SOPS / GitHub Secrets  | **secret** |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`   | `.env`                  | SOPS / GitHub Secrets  | **secret** |
 | `CORS_ORIGINS`                                | `http://localhost:5173` | `https://<domain>`     | compose    |
