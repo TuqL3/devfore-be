@@ -21,6 +21,13 @@ func abort(c *gin.Context, code int, msg string) {
 	c.AbortWithStatusJSON(code, gin.H{"error": msg})
 }
 
+// Same as abort plus a stable token the client can branch on. Only worth it
+// where two failures share a status and lead to different screens — matching on
+// the Vietnamese message would break the day someone reworded it.
+func abortCode(c *gin.Context, status int, code, msg string) {
+	c.AbortWithStatusJSON(status, gin.H{"error": msg, "code": code})
+}
+
 func serverError(c *gin.Context, err error) {
 	slog.Error("handler error", "path", c.FullPath(), "err", err)
 	abort(c, http.StatusInternalServerError, "lỗi máy chủ")

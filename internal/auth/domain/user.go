@@ -6,7 +6,10 @@ type Status string
 
 const (
 	StatusActive Status = "active"
-	StatusBanned Status = "banned"
+	// Signed up but has not entered the emailed code yet. The row exists so the
+	// username and email are held, but it cannot log in.
+	StatusPending Status = "pending"
+	StatusBanned  Status = "banned"
 )
 
 const RoleStudent = "student"
@@ -25,5 +28,7 @@ type User struct {
 }
 
 func (u *User) IsBanned() bool { return u.Status == StatusBanned }
+
+func (u *User) IsPending() bool { return u.Status == StatusPending }
 
 func (u *User) HasPassword() bool { return u.PasswordHash != nil }

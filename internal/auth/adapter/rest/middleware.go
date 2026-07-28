@@ -30,7 +30,7 @@ func (m *Middleware) Required() gin.HandlerFunc {
 			abort(c, http.StatusUnauthorized, "missing token")
 			return
 		}
-		id, roles, sid, err := m.auth.Authorize(token)
+		id, roles, sid, err := m.auth.Authorize(c.Request.Context(), token)
 		if err != nil {
 			abort(c, http.StatusUnauthorized, "invalid token")
 			return
@@ -45,7 +45,7 @@ func (m *Middleware) Required() gin.HandlerFunc {
 func (m *Middleware) Optional() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if token := cookie(c, accessCookie); token != "" {
-			if id, roles, sid, err := m.auth.Authorize(token); err == nil {
+			if id, roles, sid, err := m.auth.Authorize(c.Request.Context(), token); err == nil {
 				c.Set(ctxUserID, id)
 				c.Set(ctxRoles, roles)
 				c.Set(ctxSessionID, sid)

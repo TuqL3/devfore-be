@@ -8,3 +8,8 @@ include_ext = ["go"]
 exclude_dir = ["tmp"]
 delay = 500
 stop_on_error = true
+# The repo lives on a Windows drive mounted into WSL2, where inotify never
+# fires — without polling, air sits there watching nothing and serves a stale
+# binary while you wonder why your fix did not apply.
+poll = true
+poll_interval = 1000

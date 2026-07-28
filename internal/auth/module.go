@@ -8,11 +8,13 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/devforge/be/internal/auth/adapter/hash"
+	"github.com/devforge/be/internal/auth/adapter/mail"
 	"github.com/devforge/be/internal/auth/adapter/oauthgoogle"
 	"github.com/devforge/be/internal/auth/adapter/repo"
 	"github.com/devforge/be/internal/auth/adapter/rest"
 	"github.com/devforge/be/internal/auth/adapter/session"
 	"github.com/devforge/be/internal/auth/adapter/token"
+	"github.com/devforge/be/internal/auth/adapter/verify"
 	"github.com/devforge/be/internal/auth/usecase"
 )
 
@@ -28,6 +30,15 @@ type Config struct {
 	PublicURL          string
 	CookieDomain       string
 	CookieSecure       bool
+
+	SMTPHost       string
+	SMTPPort       string
+	SMTPUser       string
+	SMTPPass       string
+	MailFrom       string
+	VerifyCodeTTL  time.Duration
+	ResetTokenTTL  time.Duration
+	ResendCooldown time.Duration
 }
 
 type Module struct {
@@ -42,7 +53,21 @@ func New(db *gorm.DB, rdb *redis.Client, cfg Config) *Module {
 	hasher := hash.Bcrypt{}
 	google := oauthgoogle.New(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL)
 
-	uc := usecase.NewAuth(users, tokens, hasher, google, sessions)
+	codes := verify.New(rdb)
+
+	// No SMTP host configured means development: print the mail instead of
+	// dropping it, so a fresh clone can complete a signup with nothing to set up.
+	var mailer usecase.Mailer = mail.Log{}
+	if cfg.SMTPHost != "" {
+		mailer = mail.NewSMTP(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.MailFrom)
+	}
+
+	uc := usecase.NewAuth(users, tokens, hasher, google, sessions, codes, mailer, usecase.Verification{
+		CodeTTL:  cfg.VerifyCodeTTL,
+		ResetTTL: cfg.ResetTokenTTL,
+		Resend:   cfg.ResendCooldown,
+		AppURL:   cfg.FrontendURL,
+	})
 	cookies := rest.CookieConfig{Domain: cfg.CookieDomain, Secure: cfg.CookieSecure}
 
 	return &Module{
@@ -58,12 +83,13 @@ func (m *Module) Routes(api *gin.RouterGroup) {
 	h := m.handler
 	g := api.Group("/auth")
 	g.POST("/register", h.Register)
+	g.POST("/verify-email", h.VerifyEmail)
+	g.POST("/resend-code", h.ResendCode)
+	g.POST("/forgot-password", h.ForgotPassword)
+	g.POST("/reset-password", h.ResetPassword)
 	g.POST("/login", h.Login)
 	g.POST("/refresh", h.Refresh)
-	// Ending this browser's session needs no valid access token — an expired
-	// one is the most likely reason someone is signing out in the first place.
 	g.POST("/logout", h.Logout)
-	// Ending every session does, because it can strand every other device.
 	g.POST("/logout-all", m.mw.Required(), h.LogoutAll)
 	g.GET("/sessions", m.mw.Required(), h.Sessions)
 	g.DELETE("/sessions/:id", m.mw.Required(), h.RevokeSession)

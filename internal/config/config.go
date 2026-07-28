@@ -18,15 +18,12 @@ type Config struct {
 	DBPass string `env:"DB_PASSWORD,required"`
 	DBName string `env:"DB_NAME,required"`
 
-	// Refresh sessions live here, so the API cannot serve logins without it.
 	RedisAddr string `env:"REDIS_ADDR" envDefault:"localhost:6379"`
 	RedisPass string `env:"REDIS_PASSWORD"`
 	RedisDB   int    `env:"REDIS_DB" envDefault:"0"`
 
 	CORSOrigins []string `env:"CORS_ORIGINS" envSeparator:","`
 
-	// Only needed when the cookie has to span subdomains; empty means
-	// host-only, which is the safer default.
 	CookieDomain string `env:"COOKIE_DOMAIN"`
 
 	JWTSecret          string        `env:"JWT_SECRET,required"`
@@ -37,8 +34,19 @@ type Config struct {
 	GoogleRedirectURL  string        `env:"GOOGLE_REDIRECT_URL" envDefault:"http://localhost:8080/api/auth/google/callback"`
 	FrontendURL        string        `env:"FRONTEND_URL" envDefault:"http://localhost:5173"`
 
+	// Leave SMTP_HOST empty in development: the mailer then prints the code and
+	// the reset link to the server log instead of sending them.
+	SMTPHost string `env:"SMTP_HOST"`
+	SMTPPort string `env:"SMTP_PORT" envDefault:"587"`
+	SMTPUser string `env:"SMTP_USER"`
+	SMTPPass string `env:"SMTP_PASSWORD"`
+	MailFrom string `env:"MAIL_FROM" envDefault:"no-reply@devforge.local"`
+
+	VerifyCodeTTL  time.Duration `env:"VERIFY_CODE_TTL" envDefault:"10m"`
+	ResetTokenTTL  time.Duration `env:"RESET_TOKEN_TTL" envDefault:"1h"`
+	ResendCooldown time.Duration `env:"RESEND_COOLDOWN" envDefault:"60s"`
+
 	UploadDir string `env:"UPLOAD_DIR" envDefault:"./uploads"`
-	// Absolute base the browser uses to fetch uploaded files.
 	PublicURL string `env:"PUBLIC_URL" envDefault:"http://localhost:8080"`
 }
 

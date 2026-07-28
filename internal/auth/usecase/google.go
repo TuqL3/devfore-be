@@ -41,6 +41,14 @@ func (a *Auth) upsertGoogle(ctx context.Context, p GoogleProfile) (*domain.User,
 		if err := a.users.LinkGoogle(ctx, u.ID, p.ProviderID, p.AvatarURL); err != nil {
 			return nil, err
 		}
+		// Google already proved the address, which is all the pending code was
+		// ever going to ask for. Making them go read a mail now would be theatre.
+		if u.IsPending() {
+			if err := a.users.SetStatus(ctx, u.ID, domain.StatusActive); err != nil {
+				return nil, err
+			}
+			u.Status = domain.StatusActive
+		}
 		return u, nil
 	} else if !errors.Is(err, domain.ErrNotFound) {
 		return nil, err
