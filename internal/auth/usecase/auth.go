@@ -8,14 +8,11 @@ import (
 	"github.com/devforge/be/internal/auth/domain"
 )
 
-// Verification holds the knobs of the two email flows. They are settings, not
-// collaborators, which is why they travel as one struct instead of widening the
-// constructor by four more arguments.
 type Verification struct {
-	CodeTTL  time.Duration // how long a signup code stays valid
-	ResetTTL time.Duration // how long a password-reset link stays valid
-	Resend   time.Duration // minimum gap between two "send me another" requests
-	AppURL   string        // frontend origin the reset link points at
+	CodeTTL  time.Duration
+	ResetTTL time.Duration
+	Resend   time.Duration
+	AppURL   string
 }
 
 type Auth struct {
@@ -94,9 +91,6 @@ func (a *Auth) LogoutAll(ctx context.Context, userID int64) error {
 	return a.sessions.RevokeAll(ctx, userID, "")
 }
 
-// A valid signature is not enough: the session must still exist in Redis, or a
-// logout on one device would leave the others running until their access token
-// expires. Costs one Redis read per authenticated request.
 func (a *Auth) Authorize(ctx context.Context, token string) (userID int64, roles []string, sessionID string, err error) {
 	id, roles, sid, err := a.tokens.ParseAccess(token)
 	if err != nil {

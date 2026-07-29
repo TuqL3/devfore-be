@@ -55,8 +55,6 @@ func New(db *gorm.DB, rdb *redis.Client, cfg Config) *Module {
 
 	codes := verify.New(rdb)
 
-	// No SMTP host configured means development: print the mail instead of
-	// dropping it, so a fresh clone can complete a signup with nothing to set up.
 	var mailer usecase.Mailer = mail.Log{}
 	if cfg.SMTPHost != "" {
 		mailer = mail.NewSMTP(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPass, cfg.MailFrom)

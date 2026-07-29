@@ -45,8 +45,6 @@ func (h *Handler) Register(c *gin.Context) {
 		serverError(c, err)
 		return
 	}
-	// 202, not 201: the account exists but is not usable until the code lands.
-	// The echoed address is what the client needs for the verify screen.
 	c.JSON(http.StatusAccepted, gin.H{"email": strings.ToLower(req.Email)})
 }
 

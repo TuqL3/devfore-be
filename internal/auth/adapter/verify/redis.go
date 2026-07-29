@@ -1,6 +1,3 @@
-// Package verify stores the two short-lived secrets in the email flows: the
-// signup code and the password-reset token. Redis is the right home for both —
-// they expire on their own and nothing needs them after that.
 package verify
 
 import (
@@ -21,8 +18,6 @@ import (
 
 var _ usecase.VerifyStore = (*Redis)(nil)
 
-// A 6-digit code is only a million guesses, which is nothing to a script. The
-// attempt cap is what makes it safe to keep the code short enough to retype.
 const maxAttempts = 5
 
 type Redis struct{ c *redis.Client }
@@ -38,8 +33,6 @@ const (
 	fTries = "tries"
 )
 
-// Codes and tokens live in Redis only as digests: a leaked dump then yields
-// nothing that can be replayed against these endpoints.
 func digest(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
@@ -48,8 +41,6 @@ func digest(s string) string {
 func (r *Redis) PutCode(ctx context.Context, email, code string, ttl time.Duration) error {
 	key := codeKey(email)
 	pipe := r.c.TxPipeline()
-	// Del first: HSet alone would keep a stale attempt counter, so re-requesting
-	// a code would not hand back a fresh set of guesses.
 	pipe.Del(ctx, key)
 	pipe.HSet(ctx, key, map[string]any{fHash: digest(code), fTries: 0})
 	pipe.Expire(ctx, key, ttl)
@@ -94,8 +85,6 @@ func (r *Redis) PutReset(ctx context.Context, token string, userID int64, ttl ti
 }
 
 func (r *Redis) ConsumeReset(ctx context.Context, token string) (int64, error) {
-	// GetDel is the whole single-use guarantee: two tabs racing the same link
-	// cannot both come back with a user id.
 	v, err := r.c.GetDel(ctx, resetKey(token)).Int64()
 	if errors.Is(err, redis.Nil) {
 		return 0, domain.ErrInvalidToken
@@ -112,10 +101,6 @@ func (r *Redis) Attempt(ctx context.Context, key string, limit int, window time.
 	if err != nil {
 		return fmt.Errorf("attempt: %w", err)
 	}
-	// Fixed window, not sliding: the expiry is set once when the counter is
-	// born. Refreshing it on every call would let a caller who keeps hammering
-	// hold their own lockout open forever, which also punishes everyone else
-	// behind the same NAT.
 	if n == 1 {
 		r.c.Expire(ctx, k, window)
 	}

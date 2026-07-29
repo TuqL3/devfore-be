@@ -7,9 +7,6 @@ import (
 	"github.com/devforge/be/internal/auth/domain"
 )
 
-// Register no longer signs anyone in: the account is held as pending and the
-// caller has to come back through VerifyEmail with the code. Delivering that
-// code is the only thing that proves the address is real.
 func (a *Auth) Register(ctx context.Context, in RegisterInput) error {
 	hash, err := a.hasher.Hash(in.Password)
 	if err != nil {
@@ -26,9 +23,6 @@ func (a *Auth) Register(ctx context.Context, in RegisterInput) error {
 	}
 
 	if err := a.sendCode(ctx, u.Email); err != nil {
-		// Keeping the row would be worse than losing it: the username and email
-		// would be held by an account nobody can verify, and the retry everyone
-		// reaches for would come back as a conflict.
 		_ = a.users.Delete(ctx, u.ID)
 		return err
 	}
