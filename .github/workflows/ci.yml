@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # The default branch is master. Watching main meant every merge landed
+    # without CI ever running; only the pull_request trigger was doing any work.
+    branches: [master]
   pull_request:
 
 jobs:
@@ -21,6 +23,12 @@ jobs:
 
   secrets:
     runs-on: ubuntu-latest
+    # gitleaks lists the commits on the pull request to decide what to scan, and
+    # the default token cannot read them: the API answers 403 and the job dies
+    # before it looks at a single line.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
