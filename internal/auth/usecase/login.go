@@ -19,7 +19,7 @@ const (
 	loginAttemptWindow = 15 * time.Minute
 )
 
-func (a *Auth) Login(ctx context.Context, in LoginInput, meta SessionMeta) (AuthOutput, error) {
+func (a *Auth) Login(ctx context.Context, in LoginInput, meta domain.SessionMeta) (AuthOutput, error) {
 	// Counted before the password is examined, so a wrong username costs an
 	// attacker the same as a wrong password.
 	if meta.IP != "" {

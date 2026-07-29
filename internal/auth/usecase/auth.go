@@ -5,6 +5,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devforge/be/internal/auth/adapter/hash"
+	"github.com/devforge/be/internal/auth/adapter/oauthgoogle"
+	"github.com/devforge/be/internal/auth/adapter/repo"
+	"github.com/devforge/be/internal/auth/adapter/session"
+	"github.com/devforge/be/internal/auth/adapter/token"
+	codestore "github.com/devforge/be/internal/auth/adapter/verify"
 	"github.com/devforge/be/internal/auth/domain"
 )
 
@@ -16,23 +22,23 @@ type Verification struct {
 }
 
 type Auth struct {
-	users    UserRepository
-	tokens   TokenIssuer
-	hasher   PasswordHasher
-	oauth    OAuthExchanger
-	sessions SessionStore
-	codes    VerifyStore
+	users    *repo.UserRepo
+	tokens   *token.JWT
+	hasher   hash.Bcrypt
+	oauth    *oauthgoogle.Google
+	sessions *session.Redis
+	codes    *codestore.Redis
 	mailer   Mailer
 	verify   Verification
 }
 
 func NewAuth(
-	users UserRepository,
-	tokens TokenIssuer,
-	hasher PasswordHasher,
-	oauth OAuthExchanger,
-	sessions SessionStore,
-	codes VerifyStore,
+	users *repo.UserRepo,
+	tokens *token.JWT,
+	hasher hash.Bcrypt,
+	oauth *oauthgoogle.Google,
+	sessions *session.Redis,
+	codes *codestore.Redis,
 	mailer Mailer,
 	verify Verification,
 ) *Auth {
@@ -48,7 +54,7 @@ func NewAuth(
 	}
 }
 
-func (a *Auth) start(ctx context.Context, u *domain.User, meta SessionMeta) (AuthOutput, error) {
+func (a *Auth) start(ctx context.Context, u *domain.User, meta domain.SessionMeta) (AuthOutput, error) {
 	s, err := a.sessions.Create(ctx, u.ID, meta)
 	if err != nil {
 		return AuthOutput{}, err

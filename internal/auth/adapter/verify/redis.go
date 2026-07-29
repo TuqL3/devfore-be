@@ -13,10 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/devforge/be/internal/auth/domain"
-	"github.com/devforge/be/internal/auth/usecase"
 )
-
-var _ usecase.VerifyStore = (*Redis)(nil)
 
 const maxAttempts = 5
 

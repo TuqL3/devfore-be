@@ -177,8 +177,8 @@ func (h *Handler) LogoutAll(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-func sessionMeta(c *gin.Context) usecase.SessionMeta {
-	return usecase.SessionMeta{
+func sessionMeta(c *gin.Context) domain.SessionMeta {
+	return domain.SessionMeta{
 		UserAgent: c.GetHeader("User-Agent"),
 		IP:        c.ClientIP(),
 	}

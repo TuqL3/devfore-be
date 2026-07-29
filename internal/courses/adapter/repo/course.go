@@ -8,10 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/devforge/be/internal/courses/domain"
-	"github.com/devforge/be/internal/courses/usecase"
 )
-
-var _ usecase.CourseRepository = (*CourseRepo)(nil)
 
 type CourseRepo struct{ db *gorm.DB }
 

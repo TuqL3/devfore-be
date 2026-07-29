@@ -4,14 +4,15 @@ import (
 	"context"
 	"strings"
 
+	"github.com/devforge/be/internal/courses/adapter/repo"
 	"github.com/devforge/be/internal/courses/domain"
 )
 
 type Courses struct {
-	repo CourseRepository
+	repo *repo.CourseRepo
 }
 
-func NewCourses(repo CourseRepository) *Courses {
+func NewCourses(repo *repo.CourseRepo) *Courses {
 	return &Courses{repo: repo}
 }
 

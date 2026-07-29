@@ -23,10 +23,3 @@ type AuthOutput struct {
 	Credentials domain.Credentials
 	User        *domain.User
 }
-
-type GoogleProfile struct {
-	ProviderID string
-	Email      string
-	Name       string
-	AvatarURL  string
-}

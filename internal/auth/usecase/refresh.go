@@ -6,7 +6,7 @@ import (
 	"github.com/devforge/be/internal/auth/domain"
 )
 
-func (a *Auth) Refresh(ctx context.Context, sessionID string, meta SessionMeta) (domain.Credentials, error) {
+func (a *Auth) Refresh(ctx context.Context, sessionID string, meta domain.SessionMeta) (domain.Credentials, error) {
 	old, err := a.sessions.Get(ctx, sessionID)
 	if err != nil {
 		return domain.Credentials{}, domain.ErrInvalidToken

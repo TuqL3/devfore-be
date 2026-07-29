@@ -9,10 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/devforge/be/internal/auth/domain"
-	"github.com/devforge/be/internal/auth/usecase"
 )
-
-var _ usecase.UserRepository = (*UserRepo)(nil)
 
 type userModel struct {
 	ID           int64

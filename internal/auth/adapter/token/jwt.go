@@ -7,10 +7,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/devforge/be/internal/auth/domain"
-	"github.com/devforge/be/internal/auth/usecase"
 )
-
-var _ usecase.TokenIssuer = (*JWT)(nil)
 
 const typeAccess = "access"
 

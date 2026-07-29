@@ -16,7 +16,7 @@ const (
 	ipAttemptWindow = 15 * time.Minute
 )
 
-func (a *Auth) VerifyEmail(ctx context.Context, email, code string, meta SessionMeta) (AuthOutput, error) {
+func (a *Auth) VerifyEmail(ctx context.Context, email, code string, meta domain.SessionMeta) (AuthOutput, error) {
 	email = strings.ToLower(email)
 
 	if meta.IP != "" {

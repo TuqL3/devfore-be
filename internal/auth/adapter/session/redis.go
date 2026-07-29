@@ -13,10 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/devforge/be/internal/auth/domain"
-	"github.com/devforge/be/internal/auth/usecase"
 )
-
-var _ usecase.SessionStore = (*Redis)(nil)
 
 type Redis struct {
 	c   *redis.Client
@@ -41,7 +38,7 @@ const (
 
 const maxUA = 256
 
-func (r *Redis) Create(ctx context.Context, userID int64, meta usecase.SessionMeta) (domain.Session, error) {
+func (r *Redis) Create(ctx context.Context, userID int64, meta domain.SessionMeta) (domain.Session, error) {
 	id, err := newID()
 	if err != nil {
 		return domain.Session{}, err
