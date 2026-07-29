@@ -153,7 +153,7 @@ func (r *CourseRepo) LabBySlug(ctx context.Context, courseID int64, slug string)
 func (r *CourseRepo) TasksByLab(ctx context.Context, labID int64) ([]domain.Task, error) {
 	tasks := []domain.Task{}
 	err := r.db.WithContext(ctx).Raw(
-		`SELECT id, title, points, order_idx FROM lab_tasks
+		`SELECT id, title, hint, points, order_idx FROM lab_tasks
 		 WHERE lab_id = ? ORDER BY order_idx, id`, labID,
 	).Scan(&tasks).Error
 	return tasks, err

@@ -52,6 +52,7 @@ type Lab struct {
 type Task struct {
 	ID       int64
 	Title    string
+	Hint     string
 	Points   int
 	OrderIdx int
 }
