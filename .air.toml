@@ -2,9 +2,17 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-cmd = "go build -o ./tmp/server ./cmd/server"
-bin = "./tmp/server"
+# The binary goes to WSL's own ext4, not to the mounted Windows drive. Writing
+# a 46MB executable onto drvfs and exec'ing it in the same breath loses a race
+# with the mount: the file is there, the exec gets ENOENT, air dies with 127.
+cmd = "go build -o /tmp/devforge-server ./cmd/server"
+entrypoint = "/tmp/devforge-server"
 include_ext = ["go"]
 exclude_dir = ["tmp"]
 delay = 500
 stop_on_error = true
+# The repo lives on a Windows drive mounted into WSL2, where inotify never
+# fires — without polling, air sits there watching nothing and serves a stale
+# binary while you wonder why your fix did not apply.
+poll = true
+poll_interval = 1000

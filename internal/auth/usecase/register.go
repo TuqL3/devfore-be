@@ -7,20 +7,24 @@ import (
 	"github.com/devforge/be/internal/auth/domain"
 )
 
-func (a *Auth) Register(ctx context.Context, in RegisterInput, meta SessionMeta) (AuthOutput, error) {
+func (a *Auth) Register(ctx context.Context, in RegisterInput) error {
 	hash, err := a.hasher.Hash(in.Password)
 	if err != nil {
-		return AuthOutput{}, err
+		return err
 	}
 	u := &domain.User{
 		Username:     in.Username,
 		Email:        strings.ToLower(in.Email),
 		PasswordHash: &hash,
-		Status:       domain.StatusActive,
+		Status:       domain.StatusPending,
 	}
 	if err := a.users.Create(ctx, u, domain.RoleStudent); err != nil {
-		return AuthOutput{}, err
+		return err
 	}
-	u.Roles = []string{domain.RoleStudent}
-	return a.start(ctx, u, meta)
+
+	if err := a.sendCode(ctx, u.Email); err != nil {
+		_ = a.users.Delete(ctx, u.ID)
+		return err
+	}
+	return nil
 }

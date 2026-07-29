@@ -10,10 +10,8 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
-	"github.com/devforge/be/internal/auth/usecase"
+	"github.com/devforge/be/internal/auth/domain"
 )
-
-var _ usecase.OAuthExchanger = (*Google)(nil)
 
 type Google struct {
 	cfg *oauth2.Config
@@ -46,28 +44,28 @@ type googleUser struct {
 	Picture string `json:"picture"`
 }
 
-func (g *Google) Exchange(ctx context.Context, code string) (usecase.GoogleProfile, error) {
+func (g *Google) Exchange(ctx context.Context, code string) (domain.GoogleProfile, error) {
 	tok, err := g.cfg.Exchange(ctx, code)
 	if err != nil {
-		return usecase.GoogleProfile{}, fmt.Errorf("oauth exchange: %w", err)
+		return domain.GoogleProfile{}, fmt.Errorf("oauth exchange: %w", err)
 	}
 	client := g.cfg.Client(ctx, tok)
 	resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
 	if err != nil {
-		return usecase.GoogleProfile{}, fmt.Errorf("fetch userinfo: %w", err)
+		return domain.GoogleProfile{}, fmt.Errorf("fetch userinfo: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return usecase.GoogleProfile{}, fmt.Errorf("userinfo status %d", resp.StatusCode)
+		return domain.GoogleProfile{}, fmt.Errorf("userinfo status %d", resp.StatusCode)
 	}
 	var gu googleUser
 	if err := json.NewDecoder(resp.Body).Decode(&gu); err != nil {
-		return usecase.GoogleProfile{}, err
+		return domain.GoogleProfile{}, err
 	}
 	if gu.ID == "" || gu.Email == "" {
-		return usecase.GoogleProfile{}, errors.New("incomplete google profile")
+		return domain.GoogleProfile{}, errors.New("incomplete google profile")
 	}
-	return usecase.GoogleProfile{
+	return domain.GoogleProfile{
 		ProviderID: gu.ID,
 		Email:      gu.Email,
 		Name:       gu.Name,

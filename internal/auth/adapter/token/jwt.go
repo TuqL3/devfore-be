@@ -7,13 +7,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/devforge/be/internal/auth/domain"
-	"github.com/devforge/be/internal/auth/usecase"
 )
 
-var _ usecase.TokenIssuer = (*JWT)(nil)
-
-// Refresh tokens are no longer signed blobs — they are session ids held in
-// Redis — so "access" is the only type this ever mints or accepts.
 const typeAccess = "access"
 
 type claims struct {

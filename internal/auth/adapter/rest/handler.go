@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -35,7 +36,7 @@ func (h *Handler) Register(c *gin.Context) {
 	if !bind(c, &req) {
 		return
 	}
-	out, err := h.auth.Register(c.Request.Context(), req.toInput(), sessionMeta(c))
+	err := h.auth.Register(c.Request.Context(), req.toInput())
 	if errors.Is(err, domain.ErrConflict) {
 		abort(c, http.StatusConflict, "email hoặc username đã tồn tại")
 		return
@@ -44,8 +45,82 @@ func (h *Handler) Register(c *gin.Context) {
 		serverError(c, err)
 		return
 	}
-	setCredentials(c, out.Credentials, h.cookies)
-	c.JSON(http.StatusCreated, newUserResponse(out.User))
+	c.JSON(http.StatusAccepted, gin.H{"email": strings.ToLower(req.Email)})
+}
+
+func (h *Handler) VerifyEmail(c *gin.Context) {
+	var req verifyEmailRequest
+	if !bind(c, &req) {
+		return
+	}
+	out, err := h.auth.VerifyEmail(c.Request.Context(), req.Email, req.Code, sessionMeta(c))
+	switch {
+	case errors.Is(err, domain.ErrInvalidCode):
+		abort(c, http.StatusBadRequest, "mã không đúng hoặc đã hết hạn")
+	case errors.Is(err, domain.ErrTooManyAttempts):
+		abort(c, http.StatusTooManyRequests, "sai quá nhiều lần, hãy gửi lại mã mới")
+	case errors.Is(err, domain.ErrRateLimited):
+		abort(c, http.StatusTooManyRequests, "quá nhiều lần thử, vui lòng đợi rồi thử lại")
+	case errors.Is(err, domain.ErrBanned):
+		abort(c, http.StatusForbidden, "tài khoản đã bị khoá")
+	case err != nil:
+		serverError(c, err)
+	default:
+		setCredentials(c, out.Credentials, h.cookies)
+		c.JSON(http.StatusOK, newUserResponse(out.User))
+	}
+}
+
+func (h *Handler) ResendCode(c *gin.Context) {
+	var req emailRequest
+	if !bind(c, &req) {
+		return
+	}
+	err := h.auth.ResendCode(c.Request.Context(), req.Email)
+	switch {
+	case errors.Is(err, domain.ErrRateLimited):
+		abort(c, http.StatusTooManyRequests, "vui lòng đợi một chút rồi thử lại")
+	case err != nil:
+		serverError(c, err)
+	default:
+		c.Status(http.StatusNoContent)
+	}
+}
+
+func (h *Handler) ForgotPassword(c *gin.Context) {
+	var req emailRequest
+	if !bind(c, &req) {
+		return
+	}
+	err := h.auth.ForgotPassword(c.Request.Context(), req.Email)
+	switch {
+	case errors.Is(err, domain.ErrRateLimited):
+		abort(c, http.StatusTooManyRequests, "vui lòng đợi một chút rồi thử lại")
+	case err != nil:
+		serverError(c, err)
+	default:
+		// Always 204, found or not — see Auth.ForgotPassword.
+		c.Status(http.StatusNoContent)
+	}
+}
+
+func (h *Handler) ResetPassword(c *gin.Context) {
+	var req resetPasswordRequest
+	if !bind(c, &req) {
+		return
+	}
+	err := h.auth.ResetPassword(c.Request.Context(), req.Token, req.Password)
+	switch {
+	case errors.Is(err, domain.ErrInvalidToken):
+		abort(c, http.StatusBadRequest, "link không hợp lệ hoặc đã hết hạn")
+	case err != nil:
+		serverError(c, err)
+	default:
+		// Every session was just revoked, this one included, so the browser must
+		// not keep cookies that now point at nothing.
+		clearCredentials(c, h.cookies)
+		c.Status(http.StatusNoContent)
+	}
 }
 
 func (h *Handler) Login(c *gin.Context) {
@@ -59,6 +134,10 @@ func (h *Handler) Login(c *gin.Context) {
 		abort(c, http.StatusUnauthorized, "sai thông tin đăng nhập")
 	case errors.Is(err, domain.ErrBanned):
 		abort(c, http.StatusForbidden, "tài khoản đã bị khoá")
+	case errors.Is(err, domain.ErrNotVerified):
+		abortCode(c, http.StatusForbidden, "email_not_verified", "tài khoản chưa xác thực email")
+	case errors.Is(err, domain.ErrRateLimited):
+		abort(c, http.StatusTooManyRequests, "đăng nhập sai quá nhiều lần, vui lòng đợi rồi thử lại")
 	case err != nil:
 		serverError(c, err)
 	default:
@@ -67,13 +146,9 @@ func (h *Handler) Login(c *gin.Context) {
 	}
 }
 
-// Refresh reads the session straight from the cookie — there is no request
-// body to forge, and nothing for the page to hold on to.
 func (h *Handler) Refresh(c *gin.Context) {
 	cr, err := h.auth.Refresh(c.Request.Context(), SessionID(c), sessionMeta(c))
 	if err != nil {
-		// The cookies are dead weight now; leaving them would make the browser
-		// retry a session the server has already refused.
 		clearCredentials(c, h.cookies)
 		abort(c, http.StatusUnauthorized, "phiên đăng nhập không hợp lệ")
 		return
@@ -82,7 +157,6 @@ func (h *Handler) Refresh(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// Logout ends this browser's session only.
 func (h *Handler) Logout(c *gin.Context) {
 	if err := h.auth.Logout(c.Request.Context(), SessionID(c)); err != nil {
 		serverError(c, err)
@@ -92,8 +166,6 @@ func (h *Handler) Logout(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// LogoutAll ends every session on the account, on every device. Requires a
-// valid access token: this is exactly the button an attacker would want.
 func (h *Handler) LogoutAll(c *gin.Context) {
 	if err := h.auth.LogoutAll(c.Request.Context(), UserID(c)); err != nil {
 		serverError(c, err)
@@ -103,19 +175,13 @@ func (h *Handler) LogoutAll(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// sessionMeta is what the request itself reveals about the device.
-//
-// Both values are for display only. The User-Agent is whatever the client
-// chose to send, and ClientIP trusts X-Forwarded-For from the proxies listed in
-// main.go — neither is evidence of anything, so neither is used for a decision.
-func sessionMeta(c *gin.Context) usecase.SessionMeta {
-	return usecase.SessionMeta{
+func sessionMeta(c *gin.Context) domain.SessionMeta {
+	return domain.SessionMeta{
 		UserAgent: c.GetHeader("User-Agent"),
 		IP:        c.ClientIP(),
 	}
 }
 
-// Sessions lists the devices signed in to this account.
 func (h *Handler) Sessions(c *gin.Context) {
 	list, err := h.auth.Sessions(c.Request.Context(), UserID(c))
 	if err != nil {
@@ -125,7 +191,6 @@ func (h *Handler) Sessions(c *gin.Context) {
 	c.JSON(http.StatusOK, newSessionsResponse(list, SessionID(c)))
 }
 
-// RevokeSession signs out one device from the list.
 func (h *Handler) RevokeSession(c *gin.Context) {
 	id := c.Param("id")
 	err := h.auth.RevokeSession(c.Request.Context(), UserID(c), id)
@@ -135,8 +200,6 @@ func (h *Handler) RevokeSession(c *gin.Context) {
 	case err != nil:
 		serverError(c, err)
 	default:
-		// Revoking the session you are currently on is allowed — it is just a
-		// logout — but the cookies have to go with it.
 		if id == SessionID(c) {
 			clearCredentials(c, h.cookies)
 		}
@@ -244,8 +307,6 @@ func (h *Handler) GoogleCallback(c *gin.Context) {
 		return
 	}
 
-	// The credentials go back as cookies, not in the URL. A fragment survives in
-	// history, in the address bar, and in anything the page later logs.
 	setCredentials(c, out.Credentials, h.cookies)
 	c.Redirect(http.StatusTemporaryRedirect, h.frontendURL+"/auth/callback")
 }

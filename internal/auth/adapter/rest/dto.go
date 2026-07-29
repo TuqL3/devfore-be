@@ -13,9 +13,8 @@ func (r registerRequest) toInput() usecase.RegisterInput {
 }
 
 type updateProfileRequest struct {
-	Username string `json:"username" binding:"required,min=3,max=32,alphanum"`
-	Email    string `json:"email" binding:"required,email"`
-	// Pointer so an omitted field keeps the current avatar while "" clears it.
+	Username  string  `json:"username" binding:"required,min=3,max=32,alphanum"`
+	Email     string  `json:"email" binding:"required,email"`
 	AvatarURL *string `json:"avatar_url" binding:"omitempty,max=500"`
 }
 
@@ -26,6 +25,20 @@ type changePasswordRequest struct {
 
 type deleteAccountRequest struct {
 	Password string `json:"password"`
+}
+
+type verifyEmailRequest struct {
+	Email string `json:"email" binding:"required,email"`
+	Code  string `json:"code" binding:"required,len=6,number"`
+}
+
+type emailRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+type resetPasswordRequest struct {
+	Token    string `json:"token" binding:"required"`
+	Password string `json:"password" binding:"required,min=8,max=72"`
 }
 
 type loginRequest struct {

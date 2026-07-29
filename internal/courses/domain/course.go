@@ -18,9 +18,6 @@ type Course struct {
 	Labs         []Lab
 }
 
-// Level is the difficulty tier a course belongs to. Rank drives ordering and
-// the difficulty meter in the UI.
-// CourseFilter carries the query params the list endpoint accepts.
 type CourseFilter struct {
 	Level string
 	Query string
@@ -43,6 +40,20 @@ type Lab struct {
 	OrderIdx        int
 	TaskCount       int
 	Points          int
+	// Filled by a second query, never by a scan. Without the tag gorm reads the
+	// slice as a relation and fails every query that scans a Lab, including the
+	// course detail one that does not want tasks at all.
+	Tasks []Task `gorm:"-"`
+}
+
+// Task deliberately has no CheckScript field. The column holds the commands that
+// decide whether a submission passes, so anything that reaches a presenter must
+// not be able to carry it out to the client.
+type Task struct {
+	ID       int64
+	Title    string
+	Points   int
+	OrderIdx int
 }
 
 type Review struct {

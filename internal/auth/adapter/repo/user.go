@@ -9,10 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/devforge/be/internal/auth/domain"
-	"github.com/devforge/be/internal/auth/usecase"
 )
-
-var _ usecase.UserRepository = (*UserRepo)(nil)
 
 type userModel struct {
 	ID           int64
@@ -114,7 +111,7 @@ func (r *UserRepo) ByGoogleID(ctx context.Context, gid string) (*domain.User, er
 }
 
 func (r *UserRepo) ByLogin(ctx context.Context, login string) (*domain.User, error) {
-	return r.get(ctx, "email = ? OR username = ?", login, login)
+	return r.get(ctx, "email = ? OR lower(username) = ?", login, login)
 }
 
 func (r *UserRepo) loadRoles(ctx context.Context, m *userModel) error {
@@ -126,20 +123,16 @@ func (r *UserRepo) loadRoles(ctx context.Context, m *userModel) error {
 
 func (r *UserRepo) UsernameTaken(ctx context.Context, name string) (bool, error) {
 	var n int64
-	err := r.db.WithContext(ctx).Table("users").Where("username = ?", name).Count(&n).Error
+	err := r.db.WithContext(ctx).Table("users").Where("lower(username) = lower(?)", name).Count(&n).Error
 	return n > 0, err
 }
 
-// UpdateProfile writes the user-editable fields. The unique indexes on
-// username/email are the source of truth, so a race between two updates still
-// ends in ErrConflict rather than a duplicate.
 func (r *UserRepo) UpdateProfile(ctx context.Context, id int64, username, email string, avatarURL *string) error {
 	fields := map[string]any{
 		"username":   username,
 		"email":      email,
 		"updated_at": time.Now(),
 	}
-	// nil means "leave the avatar alone"; an empty string clears it.
 	if avatarURL != nil {
 		if *avatarURL == "" {
 			fields["avatar_url"] = nil
@@ -159,14 +152,16 @@ func (r *UserRepo) UpdateAvatar(ctx context.Context, id int64, url string) error
 		Updates(map[string]any{"avatar_url": url, "updated_at": time.Now()}).Error
 }
 
+func (r *UserRepo) SetStatus(ctx context.Context, id int64, status domain.Status) error {
+	return r.db.WithContext(ctx).Table("users").Where("id = ?", id).
+		Updates(map[string]any{"status": string(status), "updated_at": time.Now()}).Error
+}
+
 func (r *UserRepo) UpdatePassword(ctx context.Context, id int64, hash string) error {
 	return r.db.WithContext(ctx).Table("users").Where("id = ?", id).
 		Updates(map[string]any{"password_hash": hash, "updated_at": time.Now()}).Error
 }
 
-// Delete removes the row for good. user_roles and enrollments cascade, but
-// users.banned_by references users(id) without a cascade rule, so those
-// pointers have to be cleared first or the delete is blocked.
 func (r *UserRepo) Delete(ctx context.Context, id int64) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec(`UPDATE users SET banned_by = NULL WHERE banned_by = ?`, id).Error; err != nil {

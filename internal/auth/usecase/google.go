@@ -15,7 +15,7 @@ func (a *Auth) OAuthEnabled() bool { return a.oauth.Enabled() }
 
 func (a *Auth) OAuthURL(state string) string { return a.oauth.AuthCodeURL(state) }
 
-func (a *Auth) AuthenticateGoogle(ctx context.Context, code string, meta SessionMeta) (AuthOutput, error) {
+func (a *Auth) AuthenticateGoogle(ctx context.Context, code string, meta domain.SessionMeta) (AuthOutput, error) {
 	p, err := a.oauth.Exchange(ctx, code)
 	if err != nil {
 		return AuthOutput{}, err
@@ -30,7 +30,7 @@ func (a *Auth) AuthenticateGoogle(ctx context.Context, code string, meta Session
 	return a.start(ctx, u, meta)
 }
 
-func (a *Auth) upsertGoogle(ctx context.Context, p GoogleProfile) (*domain.User, error) {
+func (a *Auth) upsertGoogle(ctx context.Context, p domain.GoogleProfile) (*domain.User, error) {
 	if u, err := a.users.ByGoogleID(ctx, p.ProviderID); err == nil {
 		return u, nil
 	} else if !errors.Is(err, domain.ErrNotFound) {
@@ -40,6 +40,14 @@ func (a *Auth) upsertGoogle(ctx context.Context, p GoogleProfile) (*domain.User,
 	if u, err := a.users.ByEmail(ctx, email); err == nil {
 		if err := a.users.LinkGoogle(ctx, u.ID, p.ProviderID, p.AvatarURL); err != nil {
 			return nil, err
+		}
+		// Google already proved the address, which is all the pending code was
+		// ever going to ask for. Making them go read a mail now would be theatre.
+		if u.IsPending() {
+			if err := a.users.SetStatus(ctx, u.ID, domain.StatusActive); err != nil {
+				return nil, err
+			}
+			u.Status = domain.StatusActive
 		}
 		return u, nil
 	} else if !errors.Is(err, domain.ErrNotFound) {

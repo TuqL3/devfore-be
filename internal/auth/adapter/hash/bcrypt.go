@@ -2,11 +2,7 @@ package hash
 
 import (
 	"golang.org/x/crypto/bcrypt"
-
-	"github.com/devforge/be/internal/auth/usecase"
 )
-
-var _ usecase.PasswordHasher = Bcrypt{}
 
 type Bcrypt struct{}
 

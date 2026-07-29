@@ -8,10 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/devforge/be/internal/courses/domain"
-	"github.com/devforge/be/internal/courses/usecase"
 )
-
-var _ usecase.CourseRepository = (*CourseRepo)(nil)
 
 type CourseRepo struct{ db *gorm.DB }
 
@@ -52,8 +49,6 @@ const courseCols = `c.id, c.slug, c.title, c.description, c.image_url, c.level, 
 	(SELECT count(*) FROM labs l WHERE l.course_id = c.id)        AS lab_count,
 	(SELECT count(*) FROM enrollments e WHERE e.course_id = c.id) AS student_count`
 
-// ListPublished applies the level filter and the text search in SQL. Filtering
-// in the client only worked while every course fit in one response.
 func (r *CourseRepo) ListPublished(ctx context.Context, f domain.CourseFilter) ([]domain.Course, error) {
 	where := []string{"c.status = 'published'"}
 	args := []any{}
@@ -62,8 +57,6 @@ func (r *CourseRepo) ListPublished(ctx context.Context, f domain.CourseFilter) (
 		args = append(args, f.Level)
 	}
 	if f.Query != "" {
-		// ILIKE with a leading wildcard cannot use a btree index; fine at this
-		// size, revisit with pg_trgm or tsvector when the catalogue grows.
 		where = append(where, "(c.title ILIKE ? OR c.description ILIKE ?)")
 		like := "%" + f.Query + "%"
 		args = append(args, like, like)
@@ -86,8 +79,6 @@ func (r *CourseRepo) ListPublished(ctx context.Context, f domain.CourseFilter) (
 	return out, nil
 }
 
-// ListLevels returns every level with how many published courses it holds, so
-// an empty level still shows up (with 0) instead of silently disappearing.
 func (r *CourseRepo) ListLevels(ctx context.Context) ([]domain.Level, error) {
 	var rows []struct {
 		Slug        string
@@ -139,6 +130,35 @@ func (r *CourseRepo) LabsByCourse(ctx context.Context, courseID int64) ([]domain
 	return labs, err
 }
 
+// Lab slugs are unique across the whole table, but the lookup is still scoped to
+// the course so a lab cannot be reached through the wrong course's URL.
+func (r *CourseRepo) LabBySlug(ctx context.Context, courseID int64, slug string) (*domain.Lab, error) {
+	var lab domain.Lab
+	res := r.db.WithContext(ctx).Raw(
+		`SELECT l.id, l.slug, l.title, l.description_md, l.duration_minutes, l.order_idx,
+			(SELECT count(*) FROM lab_tasks t WHERE t.lab_id = l.id)                 AS task_count,
+			COALESCE((SELECT sum(points) FROM lab_tasks t WHERE t.lab_id = l.id), 0) AS points
+		 FROM labs l WHERE l.course_id = ? AND l.slug = ?`, courseID, slug,
+	).Scan(&lab)
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil, domain.ErrLabNotFound
+	}
+	return &lab, nil
+}
+
+// check_script stays out of the column list on purpose: it is the answer key.
+func (r *CourseRepo) TasksByLab(ctx context.Context, labID int64) ([]domain.Task, error) {
+	tasks := []domain.Task{}
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT id, title, points, order_idx FROM lab_tasks
+		 WHERE lab_id = ? ORDER BY order_idx, id`, labID,
+	).Scan(&tasks).Error
+	return tasks, err
+}
+
 func (r *CourseRepo) Reviews(ctx context.Context, courseID int64) ([]domain.Review, error) {
 	var reviews []domain.Review
 	err := r.db.WithContext(ctx).Raw(
@@ -169,8 +189,6 @@ func (r *CourseRepo) IsEnrolled(ctx context.Context, userID, courseID int64) (bo
 	return n > 0, err
 }
 
-// Leaderboard reads course_scores; ties break on username so the order is
-// stable between calls instead of whatever the planner returns.
 func (r *CourseRepo) Leaderboard(ctx context.Context, courseID int64) ([]domain.LeaderRow, error) {
 	rows := []domain.LeaderRow{}
 	err := r.db.WithContext(ctx).Raw(

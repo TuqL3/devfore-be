@@ -4,14 +4,15 @@ import (
 	"context"
 	"strings"
 
+	"github.com/devforge/be/internal/courses/adapter/repo"
 	"github.com/devforge/be/internal/courses/domain"
 )
 
 type Courses struct {
-	repo CourseRepository
+	repo *repo.CourseRepo
 }
 
-func NewCourses(repo CourseRepository) *Courses {
+func NewCourses(repo *repo.CourseRepo) *Courses {
 	return &Courses{repo: repo}
 }
 
@@ -42,6 +43,24 @@ func (c *Courses) Detail(ctx context.Context, slug string, userID int64) (*domai
 		}
 	}
 	return course, nil
+}
+
+// Lab resolves the course first so an unpublished course hides its labs: BySlug
+// only returns published rows, and everything here hangs off its id.
+func (c *Courses) Lab(ctx context.Context, courseSlug, labSlug string) (*domain.Lab, error) {
+	course, err := c.repo.BySlug(ctx, courseSlug)
+	if err != nil {
+		return nil, err
+	}
+	lab, err := c.repo.LabBySlug(ctx, course.ID, labSlug)
+	if err != nil {
+		return nil, err
+	}
+	lab.Tasks, err = c.repo.TasksByLab(ctx, lab.ID)
+	if err != nil {
+		return nil, err
+	}
+	return lab, nil
 }
 
 func (c *Courses) Enroll(ctx context.Context, userID int64, slug string) error {

@@ -9,9 +9,8 @@ type RegisterInput struct {
 }
 
 type UpdateProfileInput struct {
-	Username string
-	Email    string
-	// nil leaves the current avatar untouched; "" clears it.
+	Username  string
+	Email     string
 	AvatarURL *string
 }
 
@@ -23,11 +22,4 @@ type LoginInput struct {
 type AuthOutput struct {
 	Credentials domain.Credentials
 	User        *domain.User
-}
-
-type GoogleProfile struct {
-	ProviderID string
-	Email      string
-	Name       string
-	AvatarURL  string
 }
