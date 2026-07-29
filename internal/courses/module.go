@@ -28,6 +28,7 @@ func (m *Module) Routes(api *gin.RouterGroup, required, optional gin.HandlerFunc
 	g.GET("/:slug/reviews", h.Reviews)
 	g.GET("/:slug/leaderboard", h.Leaderboard)
 	g.GET("/:slug/status", optional, h.Status)
+	g.GET("/:slug/labs/:labSlug", h.Lab)
 	g.POST("/:slug/enroll", required, h.Enroll)
 	g.DELETE("/:slug/enroll", required, h.Unenroll)
 }

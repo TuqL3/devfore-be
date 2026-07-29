@@ -135,8 +135,6 @@ func (h *Handler) Login(c *gin.Context) {
 	case errors.Is(err, domain.ErrBanned):
 		abort(c, http.StatusForbidden, "tài khoản đã bị khoá")
 	case errors.Is(err, domain.ErrNotVerified):
-		// The client keys off this code to send them to the verify screen with
-		// the address they just typed.
 		abortCode(c, http.StatusForbidden, "email_not_verified", "tài khoản chưa xác thực email")
 	case errors.Is(err, domain.ErrRateLimited):
 		abort(c, http.StatusTooManyRequests, "đăng nhập sai quá nhiều lần, vui lòng đợi rồi thử lại")

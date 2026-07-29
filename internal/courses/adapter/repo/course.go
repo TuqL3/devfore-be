@@ -130,6 +130,35 @@ func (r *CourseRepo) LabsByCourse(ctx context.Context, courseID int64) ([]domain
 	return labs, err
 }
 
+// Lab slugs are unique across the whole table, but the lookup is still scoped to
+// the course so a lab cannot be reached through the wrong course's URL.
+func (r *CourseRepo) LabBySlug(ctx context.Context, courseID int64, slug string) (*domain.Lab, error) {
+	var lab domain.Lab
+	res := r.db.WithContext(ctx).Raw(
+		`SELECT l.id, l.slug, l.title, l.description_md, l.duration_minutes, l.order_idx,
+			(SELECT count(*) FROM lab_tasks t WHERE t.lab_id = l.id)                 AS task_count,
+			COALESCE((SELECT sum(points) FROM lab_tasks t WHERE t.lab_id = l.id), 0) AS points
+		 FROM labs l WHERE l.course_id = ? AND l.slug = ?`, courseID, slug,
+	).Scan(&lab)
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil, domain.ErrLabNotFound
+	}
+	return &lab, nil
+}
+
+// check_script stays out of the column list on purpose: it is the answer key.
+func (r *CourseRepo) TasksByLab(ctx context.Context, labID int64) ([]domain.Task, error) {
+	tasks := []domain.Task{}
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT id, title, points, order_idx FROM lab_tasks
+		 WHERE lab_id = ? ORDER BY order_idx, id`, labID,
+	).Scan(&tasks).Error
+	return tasks, err
+}
+
 func (r *CourseRepo) Reviews(ctx context.Context, courseID int64) ([]domain.Review, error) {
 	var reviews []domain.Review
 	err := r.db.WithContext(ctx).Raw(

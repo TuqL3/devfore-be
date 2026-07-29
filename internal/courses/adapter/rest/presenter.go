@@ -80,6 +80,38 @@ func newDetail(c *domain.Course) courseDetail {
 	}
 }
 
+type taskResponse struct {
+	ID       int64  `json:"id"`
+	Title    string `json:"title"`
+	Points   int    `json:"points"`
+	OrderIdx int    `json:"order_idx"`
+}
+
+type labDetail struct {
+	labResponse
+	Tasks []taskResponse `json:"tasks"`
+}
+
+func newLabDetail(l *domain.Lab) labDetail {
+	tasks := make([]taskResponse, len(l.Tasks))
+	for i, t := range l.Tasks {
+		tasks[i] = taskResponse(t)
+	}
+	return labDetail{
+		labResponse: labResponse{
+			ID:              l.ID,
+			Slug:            l.Slug,
+			Title:           l.Title,
+			DescriptionMD:   l.DescriptionMD,
+			DurationMinutes: l.DurationMinutes,
+			OrderIdx:        l.OrderIdx,
+			TaskCount:       l.TaskCount,
+			Points:          l.Points,
+		},
+		Tasks: tasks,
+	}
+}
+
 type reviewResponse struct {
 	ID        int64  `json:"id"`
 	Title     string `json:"title"`

@@ -52,6 +52,20 @@ func (h *Handler) Detail(c *gin.Context) {
 	c.JSON(http.StatusOK, newDetail(course))
 }
 
+func (h *Handler) Lab(c *gin.Context) {
+	lab, err := h.uc.Lab(c.Request.Context(), c.Param("slug"), c.Param("labSlug"))
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		abort(c, http.StatusNotFound, "khoá học không tồn tại")
+	case errors.Is(err, domain.ErrLabNotFound):
+		abort(c, http.StatusNotFound, "bài học không tồn tại")
+	case err != nil:
+		serverError(c, err)
+	default:
+		c.JSON(http.StatusOK, newLabDetail(lab))
+	}
+}
+
 func (h *Handler) Enroll(c *gin.Context) {
 	err := h.uc.Enroll(c.Request.Context(), userID(c), c.Param("slug"))
 	if errors.Is(err, domain.ErrNotFound) {
