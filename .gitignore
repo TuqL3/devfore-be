@@ -1,6 +1,6 @@
 .env
 *.local
-
+.claude
 # Go
 tmp/
 # server

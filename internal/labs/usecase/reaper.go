@@ -1,0 +1,74 @@
+package usecase
+
+import (
+	"context"
+	"log/slog"
+	"time"
+
+	"github.com/devforge/be/internal/labs/domain"
+)
+
+const (
+	reapEvery = 30 * time.Second
+	// Enough to clear a burst without one sweep holding the database for long.
+	// Anything left over is picked up thirty seconds later.
+	reapBatch = 50
+)
+
+// Reap runs until ctx is cancelled. It is deliberately the only thing that
+// removes an expired container: the deadline lives in the table, so a server
+// that restarted, or a student who closed the tab an hour ago, are both handled
+// by the same sweep with no in-memory state to lose.
+func (l *Labs) Reap(ctx context.Context) {
+	t := time.NewTicker(reapEvery)
+	defer t.Stop()
+
+	// One sweep before the first tick, so a restart cleans up whatever the
+	// previous process left behind instead of waiting half a minute.
+	l.reapOnce(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			l.reapOnce(ctx)
+		}
+	}
+}
+
+func (l *Labs) reapOnce(ctx context.Context) {
+	due, err := l.repo.DueForReaping(ctx, reapBatch)
+	if err != nil {
+		slog.Error("reaper query", "err", err)
+		return
+	}
+	for _, s := range due {
+		if ctx.Err() != nil {
+			return
+		}
+		l.reapOne(ctx, s)
+	}
+	if len(due) > 0 {
+		slog.Info("reaper swept", "sessions", len(due))
+	}
+}
+
+func (l *Labs) reapOne(ctx context.Context, s domain.Session) {
+	if s.ContainerID != "" {
+		if err := l.runtime.Remove(ctx, s.ContainerID); err != nil {
+			// Leave the row running so the next sweep tries again. Marking it
+			// expired here would lose the only pointer to a container that is
+			// still holding memory.
+			slog.Error("reaper remove", "session", s.ID, "container", s.ContainerID, "err", err)
+			return
+		}
+	}
+	ended, err := l.repo.End(ctx, s.ID, domain.StatusExpired)
+	if err != nil {
+		slog.Error("reaper end", "session", s.ID, "err", err)
+		return
+	}
+	if ended {
+		slog.Info("reaped lab session", "session", s.ID, "user", s.UserID, "lab", s.LabID)
+	}
+}

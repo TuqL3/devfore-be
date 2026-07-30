@@ -16,6 +16,7 @@ import (
 	"github.com/devforge/be/internal/config"
 	"github.com/devforge/be/internal/courses"
 	"github.com/devforge/be/internal/db"
+	"github.com/devforge/be/internal/labs"
 )
 
 func main() {
@@ -73,10 +74,26 @@ func run() error {
 	})
 	coursesMod := courses.New(gdb)
 
+	// The reaper has to outlive every request but die with the process, so it
+	// hangs off the same signal context the http server shuts down on.
+	reaperCtx, stopReaper := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopReaper()
+
+	labsMod, err := labs.New(reaperCtx, gdb, labs.Config{
+		DockerHost:     cfg.DockerHost,
+		SessionTTL:     cfg.LabSessionTTL,
+		AllowedOrigins: cfg.CORSOrigins,
+	})
+	if err != nil {
+		return err
+	}
+	defer labsMod.Close()
+	labsMod.StartReaper(reaperCtx)
+
 	if cfg.IsProd() {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	r, err := newRouter(cfg, sqlDB, authMod, coursesMod)
+	r, err := newRouter(cfg, sqlDB, authMod, coursesMod, labsMod)
 	if err != nil {
 		return err
 	}

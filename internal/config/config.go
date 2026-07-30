@@ -48,6 +48,16 @@ type Config struct {
 
 	UploadDir string `env:"UPLOAD_DIR" envDefault:"./uploads"`
 	PublicURL string `env:"PUBLIC_URL" envDefault:"http://localhost:8080"`
+
+	// Points at docker-socket-proxy, never at /var/run/docker.sock. The proxy is
+	// what keeps a bug in the lab code from reaching the rest of the daemon.
+	// Not named DOCKER_HOST: that one is read by the docker CLI too, so putting
+	// it in .env would quietly route `docker compose` through the proxy and have
+	// it denied halfway through.
+	DockerHost string `env:"LAB_DOCKER_HOST" envDefault:"tcp://127.0.0.1:2375"`
+	// How long a lab container may live. The reaper reads the deadline this
+	// produces out of the database, not out of a timer.
+	LabSessionTTL time.Duration `env:"LAB_SESSION_TTL" envDefault:"60m"`
 }
 
 func Load() (*Config, error) {

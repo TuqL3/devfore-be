@@ -83,6 +83,7 @@ func newDetail(c *domain.Course) courseDetail {
 type taskResponse struct {
 	ID       int64  `json:"id"`
 	Title    string `json:"title"`
+	Hint     string `json:"hint"`
 	Points   int    `json:"points"`
 	OrderIdx int    `json:"order_idx"`
 }
