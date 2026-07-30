@@ -11,8 +11,11 @@ type courseSummary struct {
 	Slug         string     `json:"slug"`
 	Title        string     `json:"title"`
 	Description  string     `json:"description"`
-	ImageURL     *string    `json:"image_url"`
-	Level        string     `json:"level"`
+	ImageURL *string `json:"image_url"`
+	Level    string  `json:"level"`
+	// Public listings only ever contain published courses, so this is here for
+	// the admin one, where telling a draft from a live course is the point.
+	Status       string     `json:"status"`
 	LabCount     int        `json:"lab_count"`
 	StudentCount int64      `json:"student_count"`
 	PublishedAt  *time.Time `json:"published_at"`
@@ -27,6 +30,7 @@ func newSummary(c domain.Course) courseSummary {
 		Description:  c.Description,
 		ImageURL:     c.ImageURL,
 		Level:        c.Level,
+		Status:       c.Status,
 		LabCount:     c.LabCount,
 		StudentCount: c.StudentCount,
 		PublishedAt:  c.PublishedAt,
@@ -86,6 +90,11 @@ type taskResponse struct {
 	Hint     string `json:"hint"`
 	Points   int    `json:"points"`
 	OrderIdx int    `json:"order_idx"`
+	Kind     string `json:"kind"`
+	// Option text only. Whether an option is the right one is decided on the
+	// server when the answer is submitted; sending it here would put the answer
+	// key in the page the question is asked on.
+	Options []string `json:"options"`
 }
 
 type labDetail struct {
@@ -96,7 +105,19 @@ type labDetail struct {
 func newLabDetail(l *domain.Lab) labDetail {
 	tasks := make([]taskResponse, len(l.Tasks))
 	for i, t := range l.Tasks {
-		tasks[i] = taskResponse(t)
+		options := t.Options
+		if options == nil {
+			options = []string{}
+		}
+		tasks[i] = taskResponse{
+			ID:       t.ID,
+			Title:    t.Title,
+			Hint:     t.Hint,
+			Points:   t.Points,
+			OrderIdx: t.OrderIdx,
+			Kind:     t.Kind,
+			Options:  options,
+		}
 	}
 	return labDetail{
 		labResponse: labResponse{

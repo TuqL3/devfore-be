@@ -12,7 +12,12 @@ const (
 	StatusBanned  Status = "banned"
 )
 
-const RoleStudent = "student"
+const (
+	RoleStudent = "student"
+	// The only role that reaches the admin screens. Named here so the middleware
+	// and the account-creation command cannot disagree on the spelling.
+	RoleAdmin = "admin"
+)
 
 type User struct {
 	ID           int64

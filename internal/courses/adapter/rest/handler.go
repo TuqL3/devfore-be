@@ -12,10 +12,15 @@ import (
 
 type Handler struct {
 	uc *usecase.Courses
+	// Where cover images are written and the origin they are served from. Empty
+	// in a deployment with no upload directory, which the upload route reports
+	// rather than silently writing nowhere.
+	uploadDir string
+	publicURL string
 }
 
-func NewHandler(uc *usecase.Courses) *Handler {
-	return &Handler{uc: uc}
+func NewHandler(uc *usecase.Courses, uploadDir, publicURL string) *Handler {
+	return &Handler{uc: uc, uploadDir: uploadDir, publicURL: publicURL}
 }
 
 func (h *Handler) List(c *gin.Context) {

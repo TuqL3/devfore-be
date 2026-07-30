@@ -38,7 +38,7 @@ func New(ctx context.Context, db *gorm.DB, cfg Config) (*Module, error) {
 		return nil, err
 	}
 
-	uc := usecase.NewLabs(repo.NewSessionRepo(db), rt, cfg.SessionTTL)
+	uc := usecase.NewLabs(repo.NewSessionRepo(db), repo.NewGradeRepo(db), rt, cfg.SessionTTL)
 	return &Module{
 		handler:  rest.NewHandler(uc),
 		terminal: rest.NewTerminal(uc, cfg.AllowedOrigins),
@@ -53,13 +53,20 @@ func (m *Module) StartReaper(ctx context.Context) { go m.uc.Reap(ctx) }
 
 func (m *Module) Close() error { return m.runtime.Close() }
 
-func (m *Module) Routes(r *gin.Engine, api *gin.RouterGroup, required gin.HandlerFunc) {
+func (m *Module) Routes(r *gin.Engine, api *gin.RouterGroup, required, admin gin.HandlerFunc) {
 	h := m.handler
+
+	// Running a script an author just typed needs a container, and containers
+	// live in this module. Admin-only: it executes shell the caller supplies.
+	api.POST("/admin/check-scripts/try", required, admin, h.TryScript)
 
 	api.POST("/labs/:slug/start", required, h.Start)
 	api.GET("/lab-sessions/current", required, h.Current)
 	api.GET("/lab-sessions/:id", required, h.Session)
 	api.DELETE("/lab-sessions/:id", required, h.Stop)
+	// Grading is scoped to a session because a check script only means anything
+	// against the container that session owns.
+	api.POST("/lab-sessions/:id/tasks/:taskID/check", required, h.Check)
 
 	// Outside /api because it is not one: the client opens it with a WebSocket
 	// handshake, and the cookie the middleware reads rides along with it.

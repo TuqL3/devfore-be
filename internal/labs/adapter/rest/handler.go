@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -19,23 +20,50 @@ type Handler struct {
 func NewHandler(uc *usecase.Labs) *Handler { return &Handler{uc: uc} }
 
 type sessionResponse struct {
-	ID           string    `json:"id"`
-	LabID        int64     `json:"lab_id"`
+	ID    string `json:"id"`
+	LabID int64  `json:"lab_id"`
+	// The slugs the lab screen is addressed by. Sent so a client that is blocked
+	// by this session can link straight to it instead of asking the student to
+	// find a course they may not remember picking.
+	LabSlug      string    `json:"lab_slug"`
+	CourseSlug   string    `json:"course_slug"`
 	Status       string    `json:"status"`
 	StartedAt    time.Time `json:"started_at"`
 	ExpiresAt    time.Time `json:"expires_at"`
 	SecondsLeft  int       `json:"seconds_left"`
 	TerminalPath string    `json:"terminal_path"`
+	// Which of this lab's tasks the student has already passed. Sent with the
+	// session so a reload restores the ticks without a second round trip.
+	PassedTaskIDs []int64 `json:"passed_task_ids"`
+}
+
+// respondSession answers with the session and the progress that belongs to it.
+// A failure to read the progress does not fail the response: the terminal is
+// what the student came for, and a missing tick costs them one press of a check
+// that awards nothing the second time.
+func (h *Handler) respondSession(c *gin.Context, code int, s *domain.Session) {
+	res := newSessionResponse(s)
+	ids, err := h.uc.PassedTaskIDs(c.Request.Context(), userID(c), s.LabID)
+	if err != nil {
+		slog.Error("read lab progress", "session", s.ID, "err", err)
+	} else {
+		res.PassedTaskIDs = ids
+	}
+	c.JSON(code, res)
 }
 
 func newSessionResponse(s *domain.Session) sessionResponse {
 	return sessionResponse{
 		ID:          s.ID,
 		LabID:       s.LabID,
+		LabSlug:     s.LabSlug,
+		CourseSlug:  s.CourseSlug,
 		Status:      string(s.Status),
 		StartedAt:   s.StartedAt,
 		ExpiresAt:   s.ExpiresAt,
 		SecondsLeft: int(usecase.Remaining(s).Seconds()),
+		// Never null in JSON: the client reads it as a list on every load.
+		PassedTaskIDs: []int64{},
 		// Handed to the client rather than built there, so the route can move
 		// without a second repository needing to be edited in step.
 		TerminalPath: "/ws/terminal/" + s.ID,
@@ -52,7 +80,7 @@ func (h *Handler) Start(c *gin.Context) {
 	case err != nil:
 		serverError(c, err)
 	default:
-		c.JSON(http.StatusCreated, newSessionResponse(out.Session))
+		h.respondSession(c, http.StatusCreated, out.Session)
 	}
 }
 
@@ -66,7 +94,13 @@ func (h *Handler) Current(c *gin.Context) {
 	case err != nil:
 		serverError(c, err)
 	default:
-		c.JSON(http.StatusOK, gin.H{"session": newSessionResponse(s)})
+		res := newSessionResponse(s)
+		if ids, err := h.uc.PassedTaskIDs(c.Request.Context(), userID(c), s.LabID); err != nil {
+			slog.Error("read lab progress", "session", s.ID, "err", err)
+		} else {
+			res.PassedTaskIDs = ids
+		}
+		c.JSON(http.StatusOK, gin.H{"session": res})
 	}
 }
 
@@ -78,7 +112,7 @@ func (h *Handler) Session(c *gin.Context) {
 	case err != nil:
 		serverError(c, err)
 	default:
-		c.JSON(http.StatusOK, newSessionResponse(s))
+		h.respondSession(c, http.StatusOK, s)
 	}
 }
 
@@ -94,6 +128,105 @@ func (h *Handler) Stop(c *gin.Context) {
 		serverError(c, err)
 	default:
 		c.Status(http.StatusNoContent)
+	}
+}
+
+// checkResponse deliberately carries no output from the script. What a check
+// prints is written by the course author and routinely names the exact path or
+// content being looked for, which is the answer. Passing or not is the whole
+// result a student is owed; the hint tab is where help belongs.
+type checkResponse struct {
+	Passed        bool `json:"passed"`
+	PointsAwarded int  `json:"points_awarded"`
+	LabCompleted  bool `json:"lab_completed"`
+}
+
+func (h *Handler) Check(c *gin.Context) {
+	taskID, err := strconv.ParseInt(c.Param("taskID"), 10, 64)
+	if err != nil {
+		abort(c, http.StatusBadRequest, "task id không hợp lệ")
+		return
+	}
+
+	// Body is optional: a script task has nothing to submit, and an old client
+	// that sends none must not start failing.
+	var body struct {
+		Selected []int `json:"selected"`
+	}
+	_ = c.ShouldBindJSON(&body)
+
+	g, err := h.uc.Check(c.Request.Context(), c.Param("id"), userID(c), taskID, body.Selected)
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		abort(c, http.StatusNotFound, "phiên lab không tồn tại")
+	case errors.Is(err, domain.ErrNotRunning):
+		abort(c, http.StatusConflict, "phiên lab đã kết thúc, hãy mở lại bài thực hành")
+	case errors.Is(err, domain.ErrTaskNotFound), errors.Is(err, domain.ErrTaskNotInLab):
+		// Same answer for both: which task ids exist is not something to map out
+		// for a caller sending ids that are not theirs.
+		abort(c, http.StatusNotFound, "nhiệm vụ không tồn tại")
+	case errors.Is(err, domain.ErrCheckTimeout):
+		abort(c, http.StatusGatewayTimeout, "bài kiểm tra chạy quá lâu, thử lại")
+	case err != nil:
+		serverError(c, err)
+	default:
+		c.JSON(http.StatusOK, checkResponse{
+			Passed:        g.Passed,
+			PointsAwarded: g.PointsAwarded,
+			LabCompleted:  g.LabCompleted,
+		})
+	}
+}
+
+// tryScriptRequest is an author testing a script before saving it, which is why
+// the script arrives in the body rather than being read from the task row.
+type tryScriptRequest struct {
+	LabID int64 `json:"lab_id"`
+	// Optional command that performs the task, so the author can see the script
+	// pass as well as fail.
+	Setup  string `json:"setup"`
+	Script string `json:"script"`
+}
+
+type tryScriptResponse struct {
+	ExitCode int    `json:"exit_code"`
+	Passed   bool   `json:"passed"`
+	Output   string `json:"output"`
+	// Only meaningful when the author supplied a setup command.
+	SetupExitCode int    `json:"setup_exit_code"`
+	SetupOutput   string `json:"setup_output"`
+	SetupFailed   bool   `json:"setup_failed"`
+}
+
+// TryScript is admin-only. It runs arbitrary shell in a throwaway sandbox — the
+// same one a student gets, so no network, no root, read-only root filesystem —
+// but it is still arbitrary shell, and the role check is what keeps it that way.
+func (h *Handler) TryScript(c *gin.Context) {
+	var req tryScriptRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.LabID <= 0 {
+		abort(c, http.StatusBadRequest, "dữ liệu không hợp lệ")
+		return
+	}
+
+	res, err := h.uc.TryScript(c.Request.Context(), req.LabID, req.Setup, req.Script)
+	switch {
+	case errors.Is(err, domain.ErrEmptyScript):
+		abort(c, http.StatusBadRequest, "chưa có script để chạy thử")
+	case errors.Is(err, domain.ErrNoImage):
+		abort(c, http.StatusBadRequest, "lab chưa gán image — chọn image rồi thử lại")
+	case errors.Is(err, domain.ErrCheckTimeout):
+		abort(c, http.StatusGatewayTimeout, "script chạy quá 10 giây")
+	case err != nil:
+		serverError(c, err)
+	default:
+		c.JSON(http.StatusOK, tryScriptResponse{
+			ExitCode:      res.ExitCode,
+			Passed:        !res.SetupFailed && res.ExitCode == 0,
+			Output:        res.Output,
+			SetupExitCode: res.SetupExitCode,
+			SetupOutput:   res.SetupOutput,
+			SetupFailed:   res.SetupFailed,
+		})
 	}
 }
 

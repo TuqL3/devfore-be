@@ -48,6 +48,39 @@ func TestLabDetailNeverSerialisesCheckScript(t *testing.T) {
 	}
 }
 
+// A choice question carries its options to the client — it cannot be answered
+// otherwise — but which of them is right is the same class of secret as a check
+// script. domain.Task has no field for it at all; this pins that down, so
+// adding one to make some future screen easier fails here first.
+func TestLabDetailNeverSerialisesCorrectAnswers(t *testing.T) {
+	lab := &domain.Lab{
+		Slug: "ly-thuyet",
+		Tasks: []domain.Task{{
+			ID: 3, Title: "Lệnh nào liệt kê file?", Points: 5,
+			Kind:    domain.KindChoice,
+			Options: []string{"ls", "cd", "rm"},
+		}},
+	}
+
+	b, err := json.Marshal(newLabDetail(lab))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(b)
+
+	for _, leak := range []string{"correct", "Correct"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("response carries %q:\n%s", leak, body)
+		}
+	}
+	if !strings.Contains(body, `"options":["ls","cd","rm"]`) {
+		t.Errorf("option text should reach the student, got: %s", body)
+	}
+	if !strings.Contains(body, `"kind":"choice"`) {
+		t.Errorf("kind should reach the student, got: %s", body)
+	}
+}
+
 // An empty task list has to marshal as [] and not null: the frontend maps over
 // it, and null is a runtime error there rather than an empty render.
 func TestLabDetailWithNoTasksMarshalsEmptyArray(t *testing.T) {

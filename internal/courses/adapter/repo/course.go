@@ -2,6 +2,8 @@ package repo
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -50,8 +52,15 @@ const courseCols = `c.id, c.slug, c.title, c.description, c.image_url, c.level, 
 	(SELECT count(*) FROM enrollments e WHERE e.course_id = c.id) AS student_count`
 
 func (r *CourseRepo) ListPublished(ctx context.Context, f domain.CourseFilter) ([]domain.Course, error) {
-	where := []string{"c.status = 'published'"}
+	// Seeded with a constant so every filter below can append unconditionally,
+	// including none of them.
+	where := []string{"true"}
 	args := []any{}
+	// Drafts are unfinished courses, not hidden ones: they are only ever listed
+	// for an admin, and the caller has to ask for them explicitly.
+	if !f.IncludeDrafts {
+		where = append(where, "c.status = 'published'")
+	}
 	if f.Level != "" {
 		where = append(where, "c.level = ?")
 		args = append(args, f.Level)
@@ -150,13 +159,51 @@ func (r *CourseRepo) LabBySlug(ctx context.Context, courseID int64, slug string)
 }
 
 // check_script stays out of the column list on purpose: it is the answer key.
+// So does options.correct — the option text has to reach the student, the flag
+// saying which one is right must not, so it is stripped in SQL rather than in
+// Go, where a later refactor could forget.
 func (r *CourseRepo) TasksByLab(ctx context.Context, labID int64) ([]domain.Task, error) {
-	tasks := []domain.Task{}
+	rows := []struct {
+		ID       int64
+		Title    string
+		Hint     string
+		Points   int
+		OrderIdx int
+		Kind     string
+		Options  []byte
+	}{}
 	err := r.db.WithContext(ctx).Raw(
-		`SELECT id, title, hint, points, order_idx FROM lab_tasks
-		 WHERE lab_id = ? ORDER BY order_idx, id`, labID,
-	).Scan(&tasks).Error
-	return tasks, err
+		`SELECT id, title, hint, points, order_idx, kind,
+		        COALESCE(
+		          (SELECT jsonb_agg(o->'text') FROM jsonb_array_elements(options) o),
+		          '[]'::jsonb
+		        ) AS options
+		   FROM lab_tasks
+		  WHERE lab_id = ? ORDER BY order_idx, id`, labID,
+	).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	tasks := make([]domain.Task, len(rows))
+	for i, row := range rows {
+		t := domain.Task{
+			ID:       row.ID,
+			Title:    row.Title,
+			Hint:     row.Hint,
+			Points:   row.Points,
+			OrderIdx: row.OrderIdx,
+			Kind:     row.Kind,
+			Options:  []string{},
+		}
+		if len(row.Options) > 0 {
+			if err := json.Unmarshal(row.Options, &t.Options); err != nil {
+				return nil, fmt.Errorf("đọc lựa chọn của nhiệm vụ %d: %w", row.ID, err)
+			}
+		}
+		tasks[i] = t
+	}
+	return tasks, nil
 }
 
 func (r *CourseRepo) Reviews(ctx context.Context, courseID int64) ([]domain.Review, error) {
