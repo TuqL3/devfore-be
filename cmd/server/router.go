@@ -29,8 +29,8 @@ func newRouter(cfg *config.Config, sqlDB *sql.DB, authMod *auth.Module, coursesM
 	api := r.Group("/api")
 	api.GET("/ping", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"message": "pong"}) })
 	authMod.Routes(api)
-	coursesMod.Routes(api, authMod.Required(), authMod.Optional())
-	labsMod.Routes(r, api, authMod.Required())
+	coursesMod.Routes(api, authMod.Required(), authMod.Optional(), authMod.AdminOnly())
+	labsMod.Routes(r, api, authMod.Required(), authMod.AdminOnly())
 
 	return r, nil
 }

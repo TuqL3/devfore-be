@@ -72,7 +72,10 @@ func run() error {
 		ResetTokenTTL:      cfg.ResetTokenTTL,
 		ResendCooldown:     cfg.ResendCooldown,
 	})
-	coursesMod := courses.New(gdb)
+	coursesMod := courses.New(gdb, courses.Config{
+		UploadDir: cfg.UploadDir,
+		PublicURL: cfg.PublicURL,
+	})
 
 	// The reaper has to outlive every request but die with the process, so it
 	// hangs off the same signal context the http server shuts down on.

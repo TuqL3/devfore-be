@@ -24,13 +24,15 @@ func NewSessionRepo(db *gorm.DB) *SessionRepo { return &SessionRepo{db: db} }
 // guessing a default would mean running students on an image nobody chose.
 func (r *SessionRepo) SpecBySlug(ctx context.Context, labSlug string) (*domain.Spec, error) {
 	var row struct {
-		LabID    int64
-		LabSlug  string
-		LabTitle string
-		Image    string
+		LabID      int64
+		LabSlug    string
+		LabTitle   string
+		CourseSlug string
+		Image      string
 	}
 	res := r.db.WithContext(ctx).Raw(
 		`SELECT l.id AS lab_id, l.slug AS lab_slug, l.title AS lab_title,
+		        c.slug AS course_slug,
 		        i.name || ':' || i.tag AS image
 		   FROM labs l
 		   JOIN lab_images i ON i.id = l.lab_image_id
@@ -43,7 +45,13 @@ func (r *SessionRepo) SpecBySlug(ctx context.Context, labSlug string) (*domain.S
 	if res.RowsAffected == 0 {
 		return nil, domain.ErrLabNotFound
 	}
-	return &domain.Spec{LabID: row.LabID, LabSlug: row.LabSlug, LabTitle: row.LabTitle, Image: row.Image}, nil
+	return &domain.Spec{
+		LabID:      row.LabID,
+		LabSlug:    row.LabSlug,
+		LabTitle:   row.LabTitle,
+		CourseSlug: row.CourseSlug,
+		Image:      row.Image,
+	}, nil
 }
 
 // Create claims the user's one running slot. The unique index is what actually
@@ -67,12 +75,21 @@ func (r *SessionRepo) SetContainer(ctx context.Context, id, containerID string) 
 	).Error
 }
 
+// sessionSelect carries the lab and course slug alongside the row so a client can
+// navigate back to a session it already owns. Both joins are left joins and
+// neither filters on course status: a session that outlived its course being
+// unpublished still has a container attached to it, and the student still has to
+// be able to reach that session to end it.
+const sessionSelect = `SELECT s.id, s.user_id, s.lab_id, s.container_id, s.status,
+       s.started_at, s.expires_at, s.ended_at,
+       COALESCE(l.slug, '') AS lab_slug, COALESCE(c.slug, '') AS course_slug
+  FROM lab_sessions s
+  LEFT JOIN labs l    ON l.id = s.lab_id
+  LEFT JOIN courses c ON c.id = l.course_id`
+
 func (r *SessionRepo) ByID(ctx context.Context, id string) (*domain.Session, error) {
 	var s domain.Session
-	res := r.db.WithContext(ctx).Raw(
-		`SELECT id, user_id, lab_id, container_id, status, started_at, expires_at, ended_at
-		   FROM lab_sessions WHERE id = ?`, id,
-	).Scan(&s)
+	res := r.db.WithContext(ctx).Raw(sessionSelect+` WHERE s.id = ?`, id).Scan(&s)
 	if res.Error != nil {
 		return nil, res.Error
 	}
@@ -85,8 +102,7 @@ func (r *SessionRepo) ByID(ctx context.Context, id string) (*domain.Session, err
 func (r *SessionRepo) RunningByUser(ctx context.Context, userID int64) (*domain.Session, error) {
 	var s domain.Session
 	res := r.db.WithContext(ctx).Raw(
-		`SELECT id, user_id, lab_id, container_id, status, started_at, expires_at, ended_at
-		   FROM lab_sessions WHERE user_id = ? AND status = 'running'`, userID,
+		sessionSelect+` WHERE s.user_id = ? AND s.status = 'running'`, userID,
 	).Scan(&s)
 	if res.Error != nil {
 		return nil, res.Error

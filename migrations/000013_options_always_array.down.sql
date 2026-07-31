@@ -1,0 +1,1 @@
+ALTER TABLE lab_tasks DROP CONSTRAINT lab_tasks_options_array_check;

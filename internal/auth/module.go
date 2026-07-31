@@ -15,6 +15,7 @@ import (
 	"github.com/devforge/be/internal/auth/adapter/session"
 	"github.com/devforge/be/internal/auth/adapter/token"
 	"github.com/devforge/be/internal/auth/adapter/verify"
+	"github.com/devforge/be/internal/auth/domain"
 	"github.com/devforge/be/internal/auth/usecase"
 )
 
@@ -76,6 +77,10 @@ func New(db *gorm.DB, rdb *redis.Client, cfg Config) *Module {
 
 func (m *Module) Required() gin.HandlerFunc { return m.mw.Required() }
 func (m *Module) Optional() gin.HandlerFunc { return m.mw.Optional() }
+
+// AdminOnly has to run behind Required: it reads the roles that one puts on the
+// context, and by itself would see an anonymous request as a user with none.
+func (m *Module) AdminOnly() gin.HandlerFunc { return rest.RequireRole(domain.RoleAdmin) }
 
 func (m *Module) Routes(api *gin.RouterGroup) {
 	h := m.handler

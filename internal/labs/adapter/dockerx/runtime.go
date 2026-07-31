@@ -51,6 +51,9 @@ func (r *Runtime) Create(ctx context.Context, sessionID, image string) (string, 
 	cfg := &container.Config{
 		Image: image,
 		User:  runAsUser,
+		// Without this the prompt shows the container id, which tells a student
+		// nothing and changes every session.
+		Hostname: "devforge",
 		// PID 1 has to outlive its own start: every terminal and every check
 		// script arrives later as a separate exec.
 		Cmd:        []string{"sleep", "infinity"},
@@ -136,7 +139,9 @@ func (r *Runtime) Exec(ctx context.Context, containerID string, cmd []string) (s
 // the process inside dies with it.
 func (r *Runtime) Attach(ctx context.Context, containerID string) (io.ReadWriteCloser, string, error) {
 	id, err := r.c.ContainerExecCreate(ctx, containerID, container.ExecOptions{
-		Cmd:          []string{"/bin/bash"},
+		// The rc file sits in /etc because the student's home is a tmpfs: anything
+		// the image puts in there is mounted over before the shell starts.
+		Cmd:          []string{"/bin/bash", "--rcfile", "/etc/devforge.bashrc"},
 		User:         runAsUser,
 		WorkingDir:   homeDir,
 		Tty:          true,

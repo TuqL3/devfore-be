@@ -1,0 +1,57 @@
+# Interactive shell setup for lab sessions. Loaded via `bash --rcfile`, because
+# the student's home is a tmpfs and cannot carry a dotfile of its own.
+
+PS1='\[\e[38;5;114m\]student\[\e[38;5;245m\]@\[\e[38;5;110m\]devforge\[\e[0m\]:\[\e[38;5;180m\]\w\[\e[0m\]\[\e[38;5;114m\]$ \[\e[0m\]'
+
+# Command-kind tasks are graded by reading this file, so it has to be written
+# after every command rather than when the shell exits — a session that is still
+# open would otherwise have an empty history the whole time it is being marked.
+HISTFILE="$HOME/.bash_history"
+HISTSIZE=2000
+HISTFILESIZE=4000
+# Duplicates and leading-space hiding both lose commands the grader is looking
+# for, so neither is enabled here.
+HISTCONTROL=
+shopt -s histappend
+PROMPT_COMMAND='history -a'
+
+alias ls='ls --color=auto'
+alias ll='ls -alF --color=auto'
+alias grep='grep --color=auto'
+
+# Banner. Printed once per session so a fresh terminal says what it is rather
+# than dropping the student at a bare prompt. The lettering is figlet's ANSI
+# Shadow baked in as literal text: rendering it at runtime would mean shipping
+# figlet in an image that is meant to carry a shell and nothing else.
+_dev=$'\e[38;5;114m'   # green   — DEV
+_forge=$'\e[38;5;180m' # amber   — FORGE
+_dim=$'\e[38;5;245m'
+_off=$'\e[0m'
+
+# 67 columns of art. A pane narrower than that would wrap every row into
+# garbage, so it falls back to a plain line instead.
+_cols=${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}
+
+printf '%s\n\n' "${_dim}Welcome to the DevForge Hands-On Lab${_off}"
+
+if [ "$_cols" -ge 70 ]; then
+	printf '%s%s%s%s\n' "$_dev" '██████╗ ███████╗██╗   ██╗' "$_forge" '███████╗ ██████╗ ██████╗  ██████╗ ███████╗'
+	printf '%s%s%s%s\n' "$_dev" '██╔══██╗██╔════╝██║   ██║' "$_forge" '██╔════╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝'
+	printf '%s%s%s%s\n' "$_dev" '██║  ██║█████╗  ██║   ██║' "$_forge" '█████╗  ██║   ██║██████╔╝██║  ███╗█████╗  '
+	printf '%s%s%s%s\n' "$_dev" '██║  ██║██╔══╝  ╚██╗ ██╔╝' "$_forge" '██╔══╝  ██║   ██║██╔══██╗██║   ██║██╔══╝  '
+	printf '%s%s%s%s\n' "$_dev" '██████╔╝███████╗ ╚████╔╝ ' "$_forge" '██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗'
+	printf '%s%s%s%s\n' "$_dev" '╚═════╝ ╚══════╝  ╚═══╝  ' "$_forge" '╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝'
+	printf '%s\n' "$_off"
+fi
+
+# The rules follow the pane rather than a fixed width, so a narrow terminal gets
+# a shorter line instead of a wrapped one.
+printf -v _rule '%*s' "$((_cols < 64 ? _cols - 1 : 64))" ''
+_rule=${_rule// /─}
+
+printf '%s\n' "${_dim}${_rule}${_off}"
+printf '%s\n' "${_dim} Sandbox Linux — không mạng, dữ liệu xoá khi kết thúc phiên.${_off}"
+printf '%s\n' "${_dim} Gõ ${_forge}ls${_dim} để bắt đầu.${_off}"
+printf '%s\n\n' "${_dim}${_rule}${_off}"
+
+unset _dev _forge _dim _off _cols _rule
