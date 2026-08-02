@@ -14,6 +14,7 @@ import (
 
 	"github.com/devforge/be/internal/audit"
 	"github.com/devforge/be/internal/auth"
+	"github.com/devforge/be/internal/chat"
 	"github.com/devforge/be/internal/config"
 	"github.com/devforge/be/internal/courses"
 	"github.com/devforge/be/internal/db"
@@ -73,6 +74,12 @@ func run() error {
 		ResetTokenTTL:      cfg.ResetTokenTTL,
 		ResendCooldown:     cfg.ResendCooldown,
 	})
+	// The room's connections are capped at one access-token lifetime, so a
+	// banned account cannot keep talking on a socket opened before the ban.
+	chatMod := chat.New(gdb, chat.Config{
+		AllowedOrigins: cfg.CORSOrigins,
+		SessionWindow:  cfg.AccessTTL,
+	})
 	coursesMod := courses.New(gdb, courses.Config{
 		UploadDir: cfg.UploadDir,
 		PublicURL: cfg.PublicURL,
@@ -104,7 +111,7 @@ func run() error {
 	if cfg.IsProd() {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	r, err := newRouter(cfg, sqlDB, authMod, coursesMod, labsMod, auditRec)
+	r, err := newRouter(cfg, sqlDB, authMod, coursesMod, labsMod, chatMod, auditRec)
 	if err != nil {
 		return err
 	}
