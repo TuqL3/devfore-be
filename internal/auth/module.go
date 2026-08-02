@@ -7,6 +7,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
+	"github.com/devforge/be/internal/audit"
 	"github.com/devforge/be/internal/auth/adapter/hash"
 	"github.com/devforge/be/internal/auth/adapter/mail"
 	"github.com/devforge/be/internal/auth/adapter/oauthgoogle"
@@ -75,6 +76,10 @@ func New(db *gorm.DB, rdb *redis.Client, cfg Config) *Module {
 	}
 }
 
+// SetAudit passes the recorder through to the handler. The moderation endpoints
+// write to it; everything else in this module ignores it.
+func (m *Module) SetAudit(a *audit.Recorder) { m.handler.SetAudit(a) }
+
 func (m *Module) Required() gin.HandlerFunc { return m.mw.Required() }
 func (m *Module) Optional() gin.HandlerFunc { return m.mw.Optional() }
 
@@ -91,6 +96,9 @@ func (m *Module) Routes(api *gin.RouterGroup) {
 	g.POST("/forgot-password", h.ForgotPassword)
 	g.POST("/reset-password", h.ResetPassword)
 	g.POST("/login", h.Login)
+	// The second half of a login, for accounts with a second factor. Not behind
+	// Required: the caller has no session yet — that is the whole point of it.
+	g.POST("/login/mfa", h.LoginMFA)
 	g.POST("/refresh", h.Refresh)
 	g.POST("/logout", h.Logout)
 	g.POST("/logout-all", m.mw.Required(), h.LogoutAll)
@@ -98,6 +106,23 @@ func (m *Module) Routes(api *gin.RouterGroup) {
 	g.DELETE("/sessions/:id", m.mw.Required(), h.RevokeSession)
 	g.GET("/google", h.GoogleLogin)
 	g.GET("/google/callback", h.GoogleCallback)
+
+	// Authentication first, then the role: RequireRole reads what Required put
+	// on the context, so on its own it would let an anonymous request through
+	// as a user with no roles.
+	adm := api.Group("/admin/users", m.mw.Required(), m.AdminOnly())
+	adm.GET("", h.AdminUsers)
+	adm.PATCH("/:id/status", h.AdminSetBanned)
+	adm.PATCH("/:id/role", h.AdminSetRole)
+
+	// Managing your own second factor. All behind Required and scoped to the
+	// caller: there is no path here that touches somebody else's factor, not
+	// even for an admin — that would be a back door around the thing.
+	tf := api.Group("/me/totp", m.mw.Required())
+	tf.GET("", h.TOTPStatus)
+	tf.POST("/start", h.TOTPStart)
+	tf.POST("/confirm", h.TOTPConfirm)
+	tf.DELETE("", h.TOTPDisable)
 
 	api.GET("/me", m.mw.Required(), h.Me)
 	api.PATCH("/me", m.mw.Required(), h.UpdateMe)

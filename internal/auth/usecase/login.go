@@ -55,5 +55,33 @@ func (a *Auth) Login(ctx context.Context, in LoginInput, meta domain.SessionMeta
 	if meta.IP != "" {
 		_ = a.codes.ClearAttempts(ctx, "login:"+meta.IP)
 	}
+
+	// The password was right, which is one factor. If the account has a second
+	// one, no session is created here — the caller gets a challenge that
+	// authorises exactly one thing, submitting a code.
+	t, err := a.users.TOTPSecret(ctx, u.ID)
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		return AuthOutput{}, err
+	}
+	if t.Confirmed() {
+		return a.challenge(ctx, u.ID)
+	}
+
 	return a.start(ctx, u, meta)
+}
+
+// challenge parks a login that still owes a second factor. The token names the
+// user only inside redis: nothing about it is readable by whoever holds it, so a
+// stolen one is worth the five minutes it lives and no more.
+func (a *Auth) challenge(ctx context.Context, userID int64) (AuthOutput, error) {
+	tok, err := newOpaqueToken()
+	if err != nil {
+		return AuthOutput{}, err
+	}
+	if err := a.codes.PutChallenge(ctx, tok, userID, challengeTTL); err != nil {
+		return AuthOutput{}, err
+	}
+	return AuthOutput{
+		Challenge: &domain.Challenge{Token: tok, TTL: challengeTTL},
+	}, nil
 }

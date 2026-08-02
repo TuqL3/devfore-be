@@ -8,13 +8,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/devforge/be/internal/audit"
 	"github.com/devforge/be/internal/auth"
 	"github.com/devforge/be/internal/config"
 	"github.com/devforge/be/internal/courses"
 	"github.com/devforge/be/internal/labs"
 )
 
-func newRouter(cfg *config.Config, sqlDB *sql.DB, authMod *auth.Module, coursesMod *courses.Module, labsMod *labs.Module) (*gin.Engine, error) {
+func newRouter(cfg *config.Config, sqlDB *sql.DB, authMod *auth.Module, coursesMod *courses.Module, labsMod *labs.Module, auditRec *audit.Recorder) (*gin.Engine, error) {
 	r := gin.New()
 
 	if err := r.SetTrustedProxies([]string{"127.0.0.1", "::1"}); err != nil {
@@ -31,6 +32,7 @@ func newRouter(cfg *config.Config, sqlDB *sql.DB, authMod *auth.Module, coursesM
 	authMod.Routes(api)
 	coursesMod.Routes(api, authMod.Required(), authMod.Optional(), authMod.AdminOnly())
 	labsMod.Routes(r, api, authMod.Required(), authMod.AdminOnly())
+	auditRec.Routes(api, authMod.Required(), authMod.AdminOnly())
 
 	return r, nil
 }

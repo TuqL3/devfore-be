@@ -6,8 +6,10 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/devforge/be/internal/labs/adapter/dockerx"
 	"github.com/devforge/be/internal/labs/adapter/repo"
@@ -126,6 +128,25 @@ func (l *Labs) Stop(ctx context.Context, sessionID string, userID int64) error {
 	if err != nil {
 		return err
 	}
+	return l.end(ctx, s)
+}
+
+// AdminStop is Stop without the ownership check. Same body underneath on
+// purpose: an admin killing a container and a student ending their own session
+// leave the system in one state, and two copies of this would be two chances for
+// one of them to stop removing the container.
+func (l *Labs) AdminStop(ctx context.Context, sessionID string) error {
+	s, err := l.repo.ByID(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	return l.end(ctx, s)
+}
+
+// end removes the container and then settles the row. That order matters: a row
+// marked ended while the container is still up leaves nothing looking for it
+// again, and the reaper only sweeps rows that still say running.
+func (l *Labs) end(ctx context.Context, s *domain.Session) error {
 	if s.Status != domain.StatusRunning {
 		return domain.ErrNotRunning
 	}
@@ -134,8 +155,64 @@ func (l *Labs) Stop(ctx context.Context, sessionID string, userID int64) error {
 			return err
 		}
 	}
-	_, err = l.repo.End(ctx, s.ID, domain.StatusEnded)
+	_, err := l.repo.End(ctx, s.ID, domain.StatusEnded)
 	return err
+}
+
+// Submit is the student handing the lab in. Same order as Stop — the container
+// goes first, because a row saying the attempt is over while the container is
+// still up leaves nothing looking for it again. The answers are already on
+// record, written as each check ran; this only closes the attempt over them.
+func (l *Labs) Submit(
+	ctx context.Context, sessionID string, userID int64,
+) (*domain.Report, error) {
+	s, err := l.Owned(ctx, sessionID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if s.Status != domain.StatusRunning {
+		return nil, domain.ErrNotRunning
+	}
+	// Every task has to be passed first. Checked here and not only in the
+	// client: handing in an untouched lab is how you would read the answer key
+	// out of the report and walk it into the next attempt.
+	left, err := l.grades.RemainingTasks(ctx, s.ID, s.LabID)
+	if err != nil {
+		return nil, err
+	}
+	if left > 0 {
+		return nil, domain.ErrIncomplete
+	}
+	if s.ContainerID != "" {
+		if err := l.runtime.Remove(ctx, s.ContainerID); err != nil {
+			return nil, err
+		}
+	}
+	if err := l.grades.Submit(ctx, s.ID); err != nil {
+		return nil, err
+	}
+	return l.grades.Report(ctx, s.ID)
+}
+
+// History is the student's own attempts. Scoped by user id rather than filtered
+// afterwards: there is no request shape here that could ask for someone else's.
+func (l *Labs) History(ctx context.Context, userID int64) ([]domain.HistoryRow, error) {
+	return l.grades.History(ctx, userID)
+}
+
+// Report is one finished attempt, answer key included. Refused while the session
+// is still running: the key is what the student is in there working out.
+func (l *Labs) Report(
+	ctx context.Context, sessionID string, userID int64,
+) (*domain.Report, error) {
+	s, err := l.Owned(ctx, sessionID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if s.Status == domain.StatusRunning {
+		return nil, domain.ErrStillRunning
+	}
+	return l.grades.Report(ctx, s.ID)
 }
 
 // Check grades one task against the student's own container and records the
@@ -163,7 +240,7 @@ func (l *Labs) Check(
 	// A choice question is answered, not performed: there is nothing in the
 	// container to look at, so no container is touched.
 	if task.Kind == domain.KindChoice {
-		return l.grades.Record(ctx, userID, s.ID, task, sameAnswer(selected, task))
+		return l.grades.Record(ctx, userID, s.ID, task, selected, sameAnswer(selected, task))
 	}
 
 	// A command task asks for something that leaves no trace — uname, which, cat
@@ -179,7 +256,7 @@ func (l *Labs) Check(
 			}
 			return domain.Grade{}, err
 		}
-		return l.grades.Record(ctx, userID, s.ID, task, ranCommand(history, task.ExpectedCommands))
+		return l.grades.Record(ctx, userID, s.ID, task, nil, ranCommand(history, task.ExpectedCommands))
 	}
 
 	passed := true
@@ -199,7 +276,7 @@ func (l *Labs) Check(
 		}
 		passed = code == 0
 	}
-	return l.grades.Record(ctx, userID, s.ID, task, passed)
+	return l.grades.Record(ctx, userID, s.ID, task, nil, passed)
 }
 
 // sameAnswer compares what was ticked against the key. Partial credit is not a
@@ -226,10 +303,9 @@ func sameAnswer(selected []int, task *domain.Task) bool {
 }
 
 // ranCommand reports whether the history contains any of the accepted commands.
-// Both sides are whitespace-normalised, so `ls   -la  /` matches `ls -la /` —
-// the shell does not care about the spacing and neither should the grading.
-// Everything else is compared literally: `ls -la /` and `ls -al /` are different
-// answers, and an author who accepts both writes both.
+// Both sides go through the same normalisation, so spacing and the order the
+// short flags were bundled in stop mattering: `ls -la /`, `ls -al /` and
+// `ls -l -a /` are the one answer a student would call correct.
 func ranCommand(history, expected string) bool {
 	accepted := map[string]bool{}
 	for _, line := range strings.Split(expected, "\n") {
@@ -248,11 +324,86 @@ func ranCommand(history, expected string) bool {
 	return false
 }
 
-func normaliseCommand(s string) string { return strings.Join(strings.Fields(s), " ") }
+// normaliseCommand puts a command line in the one form grading compares. Beyond
+// collapsing whitespace it splits bundled short flags and sorts each run of
+// them, which is what makes `-la` and `-al` the same answer.
+//
+// Applying it to the author's line as well as the student's is what keeps this
+// safe: the same input still normalises to the same output, so a command that
+// matched before still matches. It can only widen what is accepted, never
+// narrow it. What it widens to is `tar -cfz` counting as `tar -czf` — a line
+// that would fail in the shell, so nobody types it on purpose.
+//
+// It cannot tell a bundle of short flags from a one-dash long option: `-name`
+// is split into letters the same way `-la` is. That is noise rather than a bug,
+// because both sides get the same treatment.
+//
+// ponytail: three variants are still the author's job, one per line —
+// `--all` against `-a`, the `ll` alias in the lab bashrc against `ls -alF`, and
+// `-n5` against `-n 5`. Each needs per-command knowledge this does not have; a
+// flag alias table is the upgrade path if that ever becomes the common case.
+func normaliseCommand(s string) string {
+	var out []string
+	// The start of the run of single-letter flags being collected, so a run is
+	// sorted where it sits instead of flags migrating across their arguments:
+	// sorting globally would reorder `find -type f -name x`.
+	run := -1
+	flush := func() {
+		if run >= 0 {
+			sort.Strings(out[run:])
+			run = -1
+		}
+	}
+
+	for _, tok := range strings.Fields(s) {
+		for _, flag := range splitBundle(tok) {
+			if len(flag) == 2 && flag[0] == '-' {
+				if run < 0 {
+					run = len(out)
+				}
+			} else {
+				flush()
+			}
+			out = append(out, flag)
+		}
+	}
+	flush()
+	return strings.Join(out, " ")
+}
+
+// splitBundle explodes `-la` into `-l -a`, and leaves everything else alone.
+// A digit anywhere in the token stops it: `head -n5` split into `-5 -n` would
+// no longer look anything like `head -n 5`, which is the same command.
+func splitBundle(tok string) []string {
+	if len(tok) < 3 || tok[0] != '-' {
+		return []string{tok}
+	}
+	for _, r := range tok[1:] {
+		if !unicode.IsLetter(r) {
+			return []string{tok}
+		}
+	}
+	out := make([]string, 0, len(tok)-1)
+	for _, r := range tok[1:] {
+		out = append(out, "-"+string(r))
+	}
+	return out
+}
+
+// Stats is the admin overview. No user id: the role check is the whole of the
+// authorisation here, and it happens on the route rather than in this call.
+func (l *Labs) Stats(ctx context.Context) (*domain.Stats, error) {
+	return l.grades.Stats(ctx)
+}
+
+// RunningSessions is the live-container list behind the kill button.
+func (l *Labs) RunningSessions(ctx context.Context) ([]domain.RunningSession, error) {
+	return l.grades.RunningSessions(ctx)
+}
 
 // PassedTaskIDs restores the ticks on the lab screen after a reload.
-func (l *Labs) PassedTaskIDs(ctx context.Context, userID, labID int64) ([]int64, error) {
-	return l.grades.PassedTaskIDs(ctx, userID, labID)
+func (l *Labs) PassedTaskIDs(ctx context.Context, sessionID string) ([]int64, error) {
+	return l.grades.PassedTaskIDs(ctx, sessionID)
 }
 
 // Attach hands back the shell stream for the websocket to pump. The exec id comes

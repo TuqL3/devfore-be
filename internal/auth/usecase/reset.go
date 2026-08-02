@@ -31,7 +31,7 @@ func (a *Auth) ForgotPassword(ctx context.Context, email string) error {
 		return a.mailer.Send(ctx, email, "Đặt lại mật khẩu DevForge", googleOnlyEmail())
 	}
 
-	token, err := newResetToken()
+	token, err := newOpaqueToken()
 	if err != nil {
 		return err
 	}
@@ -70,10 +70,14 @@ func (a *Auth) ResetPassword(ctx context.Context, token, next string) error {
 	return a.sessions.RevokeAll(ctx, userID, "")
 }
 
-func newResetToken() (string, error) {
+// newOpaqueToken is 32 random bytes, url-safe. Used for both the password reset
+// link and the half-finished login challenge: neither says anything about the
+// account it names, which is what lets redis be the only place that mapping
+// lives.
+func newOpaqueToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generate reset token: %w", err)
+		return "", fmt.Errorf("generate token: %w", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }

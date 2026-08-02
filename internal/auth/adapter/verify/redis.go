@@ -92,6 +92,33 @@ func (r *Redis) ConsumeReset(ctx context.Context, token string) (int64, error) {
 	return v, nil
 }
 
+// challengeKey holds a login that passed the password step and still owes a
+// second factor. A separate prefix from the reset tokens on purpose: the two are
+// both "an opaque string that names a user", and one namespace would mean a
+// password-reset token could be spent as a 2FA challenge.
+func challengeKey(token string) string { return "mfa:" + digest(token) }
+
+func (r *Redis) PutChallenge(ctx context.Context, token string, userID int64, ttl time.Duration) error {
+	if err := r.c.Set(ctx, challengeKey(token), userID, ttl).Err(); err != nil {
+		return fmt.Errorf("put challenge: %w", err)
+	}
+	return nil
+}
+
+// ConsumeChallenge spends the token whether or not the code that follows turns
+// out to be right. One challenge is one attempt: leaving it alive would turn a
+// six-digit code into something worth grinding at.
+func (r *Redis) ConsumeChallenge(ctx context.Context, token string) (int64, error) {
+	v, err := r.c.GetDel(ctx, challengeKey(token)).Int64()
+	if errors.Is(err, redis.Nil) {
+		return 0, domain.ErrInvalidToken
+	}
+	if err != nil {
+		return 0, fmt.Errorf("consume challenge: %w", err)
+	}
+	return v, nil
+}
+
 func (r *Redis) Attempt(ctx context.Context, key string, limit int, window time.Duration) error {
 	k := "att:" + key
 	n, err := r.c.Incr(ctx, k).Result()

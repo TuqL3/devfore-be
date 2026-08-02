@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/devforge/be/internal/audit"
 	"github.com/devforge/be/internal/auth"
 	"github.com/devforge/be/internal/config"
 	"github.com/devforge/be/internal/courses"
@@ -93,10 +94,17 @@ func run() error {
 	defer labsMod.Close()
 	labsMod.StartReaper(reaperCtx)
 
+	// Wired after both modules exist rather than into either constructor: audit
+	// is written to by both and owned by neither, and passing it in would force
+	// one of them to be built first for no reason other than this.
+	auditRec := audit.New(gdb)
+	authMod.SetAudit(auditRec)
+	labsMod.SetAudit(auditRec)
+
 	if cfg.IsProd() {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	r, err := newRouter(cfg, sqlDB, authMod, coursesMod, labsMod)
+	r, err := newRouter(cfg, sqlDB, authMod, coursesMod, labsMod, auditRec)
 	if err != nil {
 		return err
 	}

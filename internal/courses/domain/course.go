@@ -88,6 +88,9 @@ type Task struct {
 	// Choices as the student sees them: the text only. Which ones are correct is
 	// the answer key and lives in AdminTask.
 	Options []string
+	// Exactly one option is correct, so the question can be asked with radios.
+	// It says how many, never which — the answer key stays in AdminTask.
+	SingleAnswer bool
 }
 
 // Option is one answer of a choice question. Correct never leaves the admin API.
