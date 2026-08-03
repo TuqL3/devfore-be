@@ -19,8 +19,27 @@ down: ## Tắt postgres
 	docker compose down
 
 .PHONY: migrate
-migrate: ## Chạy migration
+migrate: ## Dựng tất cả: postgres, migration, dữ liệu demo, image lab
+	docker compose up -d
+	@printf 'chờ postgres'; \
+	 for i in $$(seq 1 60); do \
+	   docker compose exec -T postgres pg_isready -U "$(DB_USER)" -q && break; \
+	   printf '.'; sleep 1; \
+	 done; \
+	 echo ' sẵn sàng'
 	$(MIGRATE) -path=/migrations -database "$(DATABASE_URL)" up
+	@$(MAKE) --no-print-directory seed
+	@$(MAKE) --no-print-directory lab-images
+
+# Chỉ schema, không dữ liệu demo và không image — dùng khi chạy ở môi trường
+# không phải máy local, nơi `seed` sẽ chèn tài khoản demo vào nơi không nên có.
+.PHONY: migrate-schema
+migrate-schema: ## Chỉ chạy migration (không seed, không build image)
+	$(MIGRATE) -path=/migrations -database "$(DATABASE_URL)" up
+
+.PHONY: migrate-down
+migrate-down: ## Lùi 1 migration gần nhất
+	$(MIGRATE) -path=/migrations -database "$(DATABASE_URL)" down 1
 
 .PHONY: migrate-new
 migrate-new: ## Tạo migration: make migrate-new name=add_courses
@@ -28,7 +47,7 @@ migrate-new: ## Tạo migration: make migrate-new name=add_courses
 	$(MIGRATE) create -ext sql -dir /migrations -seq $(name)
 
 .PHONY: seed
-seed: ## Nạp dữ liệu demo (local, cần `make up` + `make migrate` trước)
+seed: ## Nạp dữ liệu demo (đã nằm trong `make migrate`)
 	docker compose exec -T postgres psql -U "$(DB_USER)" -d "$(DB_NAME)" < scripts/seed.sql
 
 .PHONY: admin
@@ -36,9 +55,16 @@ admin: ## Tạo/cấp quyền admin: make admin email=a@b.c password=... [userna
 	@test -n "$(email)" -a -n "$(password)" || (echo "cần: make admin email=<email> password=<mật khẩu>"; exit 1)
 	go run ./cmd/createadmin -email "$(email)" -password "$(password)" $(if $(username),-username "$(username)")
 
-.PHONY: lab-image
-lab-image: ## Build image cho lab Linux (chạy lại sau khi sửa labs/linux/)
-	docker build -t devforge/linux:latest labs/linux
+.PHONY: lab-images
+lab-images: ## Build 4 image lab (đã nằm trong `make migrate`)
+	@for img in linux git docker net; do \
+		echo "==> devforge/$$img:latest"; \
+		docker build -q -f labs/$$img/Dockerfile -t devforge/$$img:latest labs || exit 1; \
+	done
+
+.PHONY: check-seed
+check-seed: ## Chạy mọi check_script trong seed thật sự trong container lab
+	bash scripts/check-seed.sh
 
 .PHONY: air
 air: ## Chạy api hot reload (host, cần `make up` trước)

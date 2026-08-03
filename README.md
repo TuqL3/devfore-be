@@ -486,8 +486,7 @@ Hai repo độc lập, mở **2 terminal**:
 # Terminal 1 — backend stack (postgres + api)
 cd devforge-be
 cp .env.example .env
-make up                       # docker compose: postgres + api :8080
-make migrate
+make migrate                  # một lệnh: bật postgres, chạy migration, nạp nội dung, build 4 image lab
 npx lefthook install          # git hook (1 lần)
 
 # Terminal 2 — frontend (Vite dev, hot reload)
@@ -507,6 +506,19 @@ npx lefthook install          # git hook (1 lần)
 Kiểm tra API: `curl localhost:8080/healthz` · `curl localhost:8080/readyz` · `curl localhost:8080/api/ping`
 
 `make help` (trong `devforge-be`) xem toàn bộ lệnh.
+
+`make migrate` gộp cả bốn bước và chạy lại được bao nhiêu lần cũng được: migration
+đã chạy thì bỏ qua, seed chỉ chèn vào chỗ trống, image có cache. Tài khoản đầu
+tiên (`superadmin` / `lukas`) do migration `000020` tạo chứ không do seed, nên
+chúng có mặt kể cả khi bỏ qua dữ liệu demo.
+
+Ở môi trường **không phải máy local** dùng `make migrate-schema` — chỉ chạy
+migration, không nạp nội dung demo và không build image.
+
+Sửa nội dung seed thì chạy `make check-seed`: nó nạp mọi `check_script` vào đúng
+image lab, chạy trên container mới (phải **trượt**) rồi chạy lại sau lời giải
+trong `scripts/seed-solutions.tsv` (phải **đậu**). Một script chấm sai chỉ lộ ra
+ở đây, không lộ ra khi đọc.
 
 > Compose đặt tên `devforge-be`, tránh trùng volume/container project khác trên máy.
 > Caddy edge (`deploy/caddy`) chỉ dùng ở **prod** (P9) — dev thì FE gọi thẳng API, không qua proxy.
