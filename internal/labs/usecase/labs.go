@@ -47,6 +47,17 @@ func (l *Labs) Start(ctx context.Context, userID int64, labSlug string) (StartOu
 		return StartOutput{}, err
 	}
 
+	// Enrolment is checked here rather than in the handler, because this is the
+	// one place every way of starting a lab passes through — and it is checked
+	// before the container exists, so a refusal costs nothing to undo.
+	enrolled, err := l.repo.IsEnrolled(ctx, userID, labSlug)
+	if err != nil {
+		return StartOutput{}, err
+	}
+	if !enrolled {
+		return StartOutput{}, domain.ErrNotEnrolled
+	}
+
 	id, err := newSessionID()
 	if err != nil {
 		return StartOutput{}, err

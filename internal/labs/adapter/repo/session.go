@@ -138,3 +138,17 @@ func (r *SessionRepo) DueForReaping(ctx context.Context, limit int) ([]domain.Se
 	).Scan(&sessions).Error
 	return sessions, err
 }
+
+// IsEnrolled reports whether the student signed up for the course this lab
+// belongs to. Answered in one query from the lab's slug: the caller has the slug
+// and nothing else at the point the question needs asking, and looking the
+// course up separately would be a second round trip to learn the same thing.
+func (r *SessionRepo) IsEnrolled(ctx context.Context, userID int64, labSlug string) (bool, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT count(*) FROM enrollments e
+		   JOIN labs l ON l.course_id = e.course_id
+		  WHERE e.user_id = ? AND l.slug = ?`, userID, labSlug,
+	).Scan(&n).Error
+	return n > 0, err
+}

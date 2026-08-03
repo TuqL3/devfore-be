@@ -53,12 +53,12 @@ func (r *GradeRepo) Task(ctx context.Context, taskID int64) (*domain.Task, error
 	}
 
 	t := domain.Task{
-		ID:             row.ID,
-		LabID:          row.LabID,
-		CourseID:       row.CourseID,
-		Points:         row.Points,
-		Kind:           row.Kind,
-		CheckScript:    row.CheckScript,
+		ID:               row.ID,
+		LabID:            row.LabID,
+		CourseID:         row.CourseID,
+		Points:           row.Points,
+		Kind:             row.Kind,
+		CheckScript:      row.CheckScript,
 		CorrectOptions:   []int{},
 		OptionCount:      row.OptionCount,
 		ExpectedCommands: row.ExpectedCommands,

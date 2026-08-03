@@ -23,4 +23,9 @@ var (
 	ErrEmptyScript = errors.New("check script is empty")
 	// The lab has no image pinned, so there is nothing to start a trial in.
 	ErrNoImage = errors.New("lab has no image")
+	// Starting a lab of a course the student never signed up for. A container is
+	// a real resource with a real cost, and enrolment is the record that says who
+	// asked for this material — so the check belongs on the way in, not on the
+	// button that happens to be the usual way there.
+	ErrNotEnrolled = errors.New("not enrolled in the course")
 )
