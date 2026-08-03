@@ -94,11 +94,11 @@ func (r *CourseRepo) DeleteLab(ctx context.Context, labID int64) error {
 // adminTaskRow keeps options as raw JSON on the way out of the database, which
 // is the only place the answer key and the option text travel together.
 type adminTaskRow struct {
-	ID          int64
-	Title       string
-	Hint        string
-	Points      int
-	OrderIdx    int
+	ID               int64
+	Title            string
+	Hint             string
+	Points           int
+	OrderIdx         int
 	Kind             string
 	CheckScript      string
 	Options          []byte
@@ -107,11 +107,11 @@ type adminTaskRow struct {
 
 func (row adminTaskRow) toDomain() (domain.AdminTask, error) {
 	t := domain.AdminTask{
-		ID:          row.ID,
-		Title:       row.Title,
-		Hint:        row.Hint,
-		Points:      row.Points,
-		OrderIdx:    row.OrderIdx,
+		ID:               row.ID,
+		Title:            row.Title,
+		Hint:             row.Hint,
+		Points:           row.Points,
+		OrderIdx:         row.OrderIdx,
 		Kind:             row.Kind,
 		CheckScript:      row.CheckScript,
 		Options:          []domain.Option{},
@@ -253,4 +253,64 @@ func (r *CourseRepo) LabImageExists(ctx context.Context, id int64) (bool, error)
 		`SELECT count(*) FROM lab_images WHERE id = ?`, id,
 	).Scan(&n).Error
 	return n > 0, err
+}
+
+// AdminReview reads one revision note. Same columns as the public read — there
+// is nothing in a review that only an author may see — but addressed by id,
+// because that is what the editor holds after a save.
+func (r *CourseRepo) AdminReview(ctx context.Context, reviewID int64) (*domain.Review, error) {
+	var review domain.Review
+	res := r.db.WithContext(ctx).Raw(
+		`SELECT id, title, content_md, order_idx FROM reviews WHERE id = ?`, reviewID,
+	).Scan(&review)
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil, domain.ErrReviewNotFound
+	}
+	return &review, nil
+}
+
+// CreateReview appends to the end of the course's list. Same as a new lab or a
+// new task: an author writing a note is adding to what is there, and picking a
+// position for them is one decision they did not ask to make.
+func (r *CourseRepo) CreateReview(ctx context.Context, courseID int64, in domain.ReviewInput) (*domain.Review, error) {
+	var id int64
+	err := r.db.WithContext(ctx).Raw(
+		`INSERT INTO reviews (course_id, title, content_md, order_idx)
+		 VALUES (?, ?, ?,
+		         COALESCE((SELECT max(order_idx) + 1 FROM reviews WHERE course_id = ?), 0))
+		 RETURNING id`,
+		courseID, in.Title, in.ContentMD, courseID,
+	).Scan(&id).Error
+	if err != nil {
+		return nil, err
+	}
+	return r.AdminReview(ctx, id)
+}
+
+func (r *CourseRepo) UpdateReview(ctx context.Context, reviewID int64, in domain.ReviewInput) (*domain.Review, error) {
+	res := r.db.WithContext(ctx).Exec(
+		`UPDATE reviews SET title = ?, content_md = ?, order_idx = ? WHERE id = ?`,
+		in.Title, in.ContentMD, in.OrderIdx, reviewID,
+	)
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil, domain.ErrReviewNotFound
+	}
+	return r.AdminReview(ctx, reviewID)
+}
+
+func (r *CourseRepo) DeleteReview(ctx context.Context, reviewID int64) error {
+	res := r.db.WithContext(ctx).Exec(`DELETE FROM reviews WHERE id = ?`, reviewID)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return domain.ErrReviewNotFound
+	}
+	return nil
 }

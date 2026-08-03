@@ -236,3 +236,59 @@ func cleanTask(in domain.TaskInput) (domain.TaskInput, error) {
 	in.Options = options
 	return in, nil
 }
+
+// maxReviewMD is the same ceiling a lab's instructions get: both are one screen
+// of markdown an author writes by hand.
+const maxReviewMD = maxDescriptionMD
+
+func (c *Courses) AdminReviews(ctx context.Context, courseID int64) ([]domain.Review, error) {
+	// Reading the course first turns a bad id into a 404 rather than an empty
+	// list, which reads as "this course has no notes yet".
+	if _, err := c.repo.ByID(ctx, courseID); err != nil {
+		return nil, err
+	}
+	return c.repo.Reviews(ctx, courseID)
+}
+
+func (c *Courses) CreateReview(ctx context.Context, courseID int64, in domain.ReviewInput) (*domain.Review, error) {
+	if _, err := c.repo.ByID(ctx, courseID); err != nil {
+		return nil, err
+	}
+	in, err := cleanReview(in)
+	if err != nil {
+		return nil, err
+	}
+	return c.repo.CreateReview(ctx, courseID, in)
+}
+
+func (c *Courses) UpdateReview(ctx context.Context, reviewID int64, in domain.ReviewInput) (*domain.Review, error) {
+	in, err := cleanReview(in)
+	if err != nil {
+		return nil, err
+	}
+	return c.repo.UpdateReview(ctx, reviewID, in)
+}
+
+func (c *Courses) DeleteReview(ctx context.Context, reviewID int64) error {
+	return c.repo.DeleteReview(ctx, reviewID)
+}
+
+// cleanReview trims and bounds. The body is markdown rendered on a page anyone
+// signed in can read, so the length is a real limit rather than a formality —
+// but the markup itself is left alone, because the reader renders it as text.
+func cleanReview(in domain.ReviewInput) (domain.ReviewInput, error) {
+	in.Title = strings.TrimSpace(in.Title)
+	in.ContentMD = strings.TrimSpace(in.ContentMD)
+
+	switch {
+	case in.Title == "":
+		return in, domain.InvalidInput{Field: "title", Message: "tiêu đề không được để trống"}
+	case len(in.Title) > maxTitle:
+		return in, domain.InvalidInput{Field: "title", Message: "tiêu đề quá dài"}
+	case len(in.ContentMD) > maxReviewMD:
+		return in, domain.InvalidInput{Field: "content_md", Message: "nội dung quá dài"}
+	case in.OrderIdx < 0:
+		return in, domain.InvalidInput{Field: "order_idx", Message: "thứ tự không được âm"}
+	}
+	return in, nil
+}

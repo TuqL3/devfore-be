@@ -43,6 +43,8 @@ func (m *Module) Routes(api *gin.RouterGroup, required, optional, admin gin.Hand
 	a.DELETE("/:id", h.AdminDelete)
 	a.GET("/:id/labs", h.AdminLabs)
 	a.POST("/:id/labs", h.AdminCreateLab)
+	a.GET("/:id/reviews", h.AdminReviews)
+	a.POST("/:id/reviews", h.AdminCreateReview)
 
 	// Labs and tasks are addressed by their own id rather than nested under the
 	// course: they already know which course they belong to, and a path that
@@ -53,6 +55,12 @@ func (m *Module) Routes(api *gin.RouterGroup, required, optional, admin gin.Hand
 	adm.POST("/labs/:labID/tasks", h.AdminCreateTask)
 	adm.PUT("/tasks/:taskID", h.AdminUpdateTask)
 	adm.DELETE("/tasks/:taskID", h.AdminDeleteTask)
+	adm.PUT("/reviews/:reviewID", h.AdminUpdateReview)
+	adm.DELETE("/reviews/:reviewID", h.AdminDeleteReview)
+
+	// The caller's own enrolments. Outside the /courses group because it is
+	// addressed by who is asking, not by which course.
+	api.GET("/me/courses", required, h.MyCourses)
 
 	g := api.Group("/courses")
 	g.GET("", h.List)

@@ -144,12 +144,33 @@ type reviewResponse struct {
 	OrderIdx  int    `json:"order_idx"`
 }
 
+func newReview(r domain.Review) reviewResponse {
+	return reviewResponse{ID: r.ID, Title: r.Title, ContentMD: r.ContentMD, OrderIdx: r.OrderIdx}
+}
+
 func newReviewList(rs []domain.Review) []reviewResponse {
 	out := make([]reviewResponse, len(rs))
 	for i, r := range rs {
-		out[i] = reviewResponse{ID: r.ID, Title: r.Title, ContentMD: r.ContentMD, OrderIdx: r.OrderIdx}
+		out[i] = newReview(r)
 	}
 	return out
+}
+
+// reviewInput is the same shape coming back the other way. order_idx is a
+// pointer-free int: the create path ignores it and appends, so a form that does
+// not send one gets the end of the list rather than position zero.
+type reviewInput struct {
+	Title     string `json:"title"`
+	ContentMD string `json:"content_md"`
+	OrderIdx  int    `json:"order_idx"`
+}
+
+func (in reviewInput) toDomain() domain.ReviewInput {
+	return domain.ReviewInput{
+		Title:     in.Title,
+		ContentMD: in.ContentMD,
+		OrderIdx:  in.OrderIdx,
+	}
 }
 
 type leaderRow struct {
@@ -190,6 +211,29 @@ func newLevelList(levels []domain.Level) []levelResponse {
 	out := make([]levelResponse, len(levels))
 	for i, l := range levels {
 		out[i] = levelResponse(l)
+	}
+	return out
+}
+
+// enrollmentResponse is a course summary plus this student's progress in it.
+// Flattened rather than nested, because every field on it is about the same
+// thing from the reader's point of view: one row on their profile.
+type enrollmentResponse struct {
+	courseSummary
+	Score         int       `json:"score"`
+	LabsCompleted int       `json:"labs_completed"`
+	EnrolledAt    time.Time `json:"enrolled_at"`
+}
+
+func newEnrollmentList(es []domain.Enrollment) []enrollmentResponse {
+	out := make([]enrollmentResponse, len(es))
+	for i, e := range es {
+		out[i] = enrollmentResponse{
+			courseSummary: newSummary(e.Course),
+			Score:         e.Score,
+			LabsCompleted: e.LabsCompleted,
+			EnrolledAt:    e.EnrolledAt,
+		}
 	}
 	return out
 }

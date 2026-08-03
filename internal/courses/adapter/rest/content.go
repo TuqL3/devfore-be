@@ -255,6 +255,65 @@ func (h *Handler) AdminDeleteTask(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// The revision notes behind a course's "Ôn tập" tab. Addressed by course id on
+// the way in and by their own id afterwards, the same way labs are.
+func (h *Handler) AdminReviews(c *gin.Context) {
+	id, ok := pathID(c, "id")
+	if !ok {
+		return
+	}
+	reviews, err := h.uc.AdminReviews(c.Request.Context(), id)
+	if writeCourseError(c, err) {
+		return
+	}
+	c.JSON(http.StatusOK, newReviewList(reviews))
+}
+
+func (h *Handler) AdminCreateReview(c *gin.Context) {
+	id, ok := pathID(c, "id")
+	if !ok {
+		return
+	}
+	var in reviewInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		abort(c, http.StatusBadRequest, "dữ liệu không hợp lệ")
+		return
+	}
+	review, err := h.uc.CreateReview(c.Request.Context(), id, in.toDomain())
+	if writeCourseError(c, err) {
+		return
+	}
+	c.JSON(http.StatusCreated, newReview(*review))
+}
+
+func (h *Handler) AdminUpdateReview(c *gin.Context) {
+	id, ok := pathID(c, "reviewID")
+	if !ok {
+		return
+	}
+	var in reviewInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		abort(c, http.StatusBadRequest, "dữ liệu không hợp lệ")
+		return
+	}
+	review, err := h.uc.UpdateReview(c.Request.Context(), id, in.toDomain())
+	if writeCourseError(c, err) {
+		return
+	}
+	c.JSON(http.StatusOK, newReview(*review))
+}
+
+func (h *Handler) AdminDeleteReview(c *gin.Context) {
+	id, ok := pathID(c, "reviewID")
+	if !ok {
+		return
+	}
+	if writeCourseError(c, h.uc.DeleteReview(c.Request.Context(), id)) {
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
 func (h *Handler) AdminLabImages(c *gin.Context) {
 	images, err := h.uc.LabImages(c.Request.Context())
 	if writeCourseError(c, err) {

@@ -152,6 +152,14 @@ type Review struct {
 	OrderIdx  int
 }
 
+// ReviewInput is what an author submits for a revision note. Same shape minus
+// the id, which the database owns.
+type ReviewInput struct {
+	Title     string
+	ContentMD string
+	OrderIdx  int
+}
+
 type LeaderRow struct {
 	Username      string
 	AvatarURL     *string
@@ -159,4 +167,15 @@ type LeaderRow struct {
 	LabsCompleted int
 	Attempts      int
 	UpdatedAt     time.Time
+}
+
+// Enrollment is one row of "my courses": the course, plus how far this student
+// has got in it. The progress numbers come from course_scores, which the grading
+// path already maintains — recomputing them here would be a second answer to the
+// same question, free to disagree with the leaderboard.
+type Enrollment struct {
+	Course        Course
+	Score         int
+	LabsCompleted int
+	EnrolledAt    time.Time
 }

@@ -124,6 +124,8 @@ func writeCourseError(c *gin.Context, err error) bool {
 		abort(c, http.StatusNotFound, "lab không tồn tại")
 	case errors.Is(err, domain.ErrTaskNotFound):
 		abort(c, http.StatusNotFound, "nhiệm vụ không tồn tại")
+	case errors.Is(err, domain.ErrReviewNotFound):
+		abort(c, http.StatusNotFound, "bài ôn tập không tồn tại")
 	default:
 		serverError(c, err)
 	}
