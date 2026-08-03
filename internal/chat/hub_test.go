@@ -14,8 +14,8 @@ import (
 func TestBroadcastSkipsTheSlowAndForgetsTheGone(t *testing.T) {
 	h := NewHub()
 
-	fast, leaveFast := h.Join()
-	_, leaveSlow := h.Join() // never read from
+	fast, leaveFast := h.Join(1)
+	_, leaveSlow := h.Join(2) // never read from
 	if h.Count() != 2 {
 		t.Fatalf("count = %d, want 2", h.Count())
 	}
@@ -25,7 +25,7 @@ func TestBroadcastSkipsTheSlowAndForgetsTheGone(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for i := range outbox * 3 {
-			h.Broadcast(Message{ID: int64(i), Body: "x"})
+			h.Broadcast(Event{Kind: "message", Message: Message{ID: int64(i), Body: "x"}})
 		}
 		close(done)
 	}()
@@ -38,8 +38,8 @@ func TestBroadcastSkipsTheSlowAndForgetsTheGone(t *testing.T) {
 	// The reader that is keeping up still got messages, in order.
 	first := <-fast
 	second := <-fast
-	if second.ID <= first.ID {
-		t.Fatalf("out of order: %d then %d", first.ID, second.ID)
+	if second.Message.ID <= first.Message.ID {
+		t.Fatalf("out of order: %d then %d", first.Message.ID, second.Message.ID)
 	}
 
 	leaveSlow()
@@ -67,7 +67,7 @@ func TestHubIsSafeUnderConcurrentJoinAndBroadcast(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ch, leave := h.Join()
+			ch, leave := h.Join(1)
 			defer leave()
 			go func() {
 				for range ch {
@@ -80,7 +80,7 @@ func TestHubIsSafeUnderConcurrentJoinAndBroadcast(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			h.Broadcast(Message{Body: "hi"})
+			h.Broadcast(Event{Kind: "message", Message: Message{Body: "hi"}})
 		}()
 	}
 	wg.Wait()

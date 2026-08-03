@@ -49,7 +49,9 @@ func New(db *gorm.DB, cfg Config) *Module {
 // middleware: the room is for signed-in students, and the websocket handshake
 // is authorised by the same cookie as everything else.
 func (m *Module) Routes(r *gin.Engine, api *gin.RouterGroup, required gin.HandlerFunc) {
-	api.GET("/chat/messages", required, m.History)
+	api.GET("/chat/messages", required, m.Messages)
+	api.GET("/chat/conversations", required, m.Conversations)
+	api.GET("/chat/people", required, m.People)
 	// Outside the /api group's json handlers for the same reason the lab
 	// terminal is: an upgrade is not a json response.
 	r.GET("/ws/chat", required, m.Handle)

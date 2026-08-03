@@ -46,7 +46,8 @@ func TestRoomDeliversAndPersists(t *testing.T) {
 	send(t, aliceWS, body)
 
 	// The sender sees it too: the room is one list, not "mine plus theirs".
-	got := read(t, aliceWS)
+	ev := read(t, aliceWS)
+	got := ev.Message
 	if got.Body != body || got.Username != aliceName {
 		t.Fatalf("sender got %+v, want body %q from %q", got, body, aliceName)
 	}
@@ -54,13 +55,13 @@ func TestRoomDeliversAndPersists(t *testing.T) {
 		t.Fatalf("message has no id or timestamp: %+v — the database has to assign both", got)
 	}
 
-	onBob := read(t, bobWS)
+	onBob := read(t, bobWS).Message
 	if onBob.ID != got.ID || onBob.Body != body {
 		t.Fatalf("bob got %+v, want the same message alice sent", onBob)
 	}
 
 	// Persisted, so somebody joining later reads it.
-	history, err := m.repo.Recent(context.Background())
+	history, err := m.repo.Room(context.Background(), 0)
 	if err != nil {
 		t.Fatalf("history: %v", err)
 	}
@@ -73,7 +74,7 @@ func TestRoomDeliversAndPersists(t *testing.T) {
 	// this read would return it instead.
 	send(t, bobWS, "   \n\t ")
 	send(t, bobWS, "thật")
-	next := read(t, aliceWS)
+	next := read(t, aliceWS).Message
 	if next.Body != "thật" || next.Username != bobName {
 		t.Fatalf("got %+v, want the blank dropped and %q from %q", next, "thật", bobName)
 	}
@@ -96,7 +97,7 @@ func TestLongMessageIsTruncatedNotDropped(t *testing.T) {
 	waitFor(t, func() bool { return m.hub.Count() == 1 })
 
 	send(t, ws, strings.Repeat("ế", MaxBody+100))
-	got := read(t, ws)
+	got := read(t, ws).Message
 	if n := len([]rune(got.Body)); n != MaxBody {
 		t.Fatalf("stored %d runes, want %d", n, MaxBody)
 	}
@@ -126,8 +127,8 @@ func TestBurstIsCappedPerConnection(t *testing.T) {
 	delivered := 0
 	_ = ws.SetReadDeadline(time.Now().Add(750 * time.Millisecond))
 	for {
-		var msg Message
-		if err := ws.ReadJSON(&msg); err != nil {
+		var e Event
+		if err := ws.ReadJSON(&e); err != nil {
 			break
 		}
 		delivered++
@@ -177,23 +178,55 @@ func serve(t *testing.T, m *Module) (*httptest.Server, func(*testing.T, int64) *
 
 func send(t *testing.T, ws *websocket.Conn, body string) {
 	t.Helper()
-	if err := ws.WriteJSON(incoming{Body: body}); err != nil {
+	if err := ws.WriteJSON(incoming{Kind: "send", Body: body}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 }
 
-func read(t *testing.T, ws *websocket.Conn) Message {
+func sendDM(t *testing.T, ws *websocket.Conn, peer int64, body string) {
+	t.Helper()
+	if err := ws.WriteJSON(incoming{Kind: "send", PeerID: peer, Body: body}); err != nil {
+		t.Fatalf("write dm: %v", err)
+	}
+}
+
+func ask(t *testing.T, ws *websocket.Conn, in incoming) {
+	t.Helper()
+	if err := ws.WriteJSON(in); err != nil {
+		t.Fatalf("write %s: %v", in.Kind, err)
+	}
+}
+
+func read(t *testing.T, ws *websocket.Conn) Event {
 	t.Helper()
 	_ = ws.SetReadDeadline(time.Now().Add(3 * time.Second))
 	_, raw, err := ws.ReadMessage()
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	var m Message
-	if err := json.Unmarshal(raw, &m); err != nil {
+	var e Event
+	if err := json.Unmarshal(raw, &e); err != nil {
 		t.Fatalf("decode %s: %v", raw, err)
 	}
-	return m
+	return e
+}
+
+// nextIs sends a sentinel down `from` and asserts it is the very next thing to
+// reach `watch`. That is how "this must not be delivered" is checked: anything
+// that was wrongly broadcast is queued ahead of the sentinel and shows up here
+// instead of it.
+//
+// Waiting for a read to time out would be the obvious way and is the wrong one —
+// gorilla treats any read error, deadline included, as permanent, so the socket
+// would be unusable for the rest of the test.
+func nextIs(t *testing.T, watch, from *websocket.Conn, why string) {
+	t.Helper()
+	sentinel := fmt.Sprintf("sentinel-%d", time.Now().UnixNano())
+	send(t, from, sentinel)
+	got := read(t, watch).Message
+	if got.Body != sentinel {
+		t.Fatalf("%s — but %q arrived first", why, got.Body)
+	}
 }
 
 func waitFor(t *testing.T, cond func() bool) {
@@ -240,4 +273,219 @@ func seedUser(t *testing.T, db *gorm.DB) (int64, string) {
 		db.Exec(`DELETE FROM users WHERE id = ?`, id)
 	})
 	return id, name
+}
+
+// The rule that keeps private messages private. Tested without a socket first,
+// because it is small enough to reason about and too important to only exercise
+// through three goroutines and a network.
+func TestAudienceKeepsDirectMessagesBetweenTwoPeople(t *testing.T) {
+	id := func(n int64) *int64 { return &n }
+
+	room := Message{UserID: id(1)}
+	for _, viewer := range []int64{1, 2, 999} {
+		if !Audience(room, viewer) {
+			t.Fatalf("room message hidden from %d", viewer)
+		}
+	}
+
+	dm := Message{UserID: id(1), PeerID: id(2)}
+	if !Audience(dm, 1) {
+		t.Fatal("sender cannot see their own direct message")
+	}
+	if !Audience(dm, 2) {
+		t.Fatal("recipient cannot see the direct message")
+	}
+	for _, outsider := range []int64{3, 999, 0} {
+		if Audience(dm, outsider) {
+			t.Fatalf("direct message leaked to %d", outsider)
+		}
+	}
+}
+
+// The same rule over a real socket, because Audience being right is only half
+// of it — the hub also has to know which user each connection belongs to.
+func TestDirectMessageReachesOnlyThePair(t *testing.T) {
+	db := openDB(t)
+	gin.SetMode(gin.TestMode)
+
+	alice, _ := seedUser(t, db)
+	bob, bobName := seedUser(t, db)
+	carol, _ := seedUser(t, db)
+
+	m := New(db, Config{SessionWindow: time.Minute})
+	srv, dial := serve(t, m)
+	defer srv.Close()
+
+	aliceWS := dial(t, alice)
+	defer aliceWS.Close()
+	bobWS := dial(t, bob)
+	defer bobWS.Close()
+	carolWS := dial(t, carol)
+	defer carolWS.Close()
+	waitFor(t, func() bool { return m.hub.Count() == 3 })
+
+	sendDM(t, bobWS, alice, "chỉ hai đứa mình")
+
+	onBob := read(t, bobWS).Message
+	if onBob.PeerID == nil || *onBob.PeerID != alice {
+		t.Fatalf("sender got %+v, want a direct message to alice", onBob)
+	}
+	onAlice := read(t, aliceWS).Message
+	if onAlice.ID != onBob.ID || onAlice.Username != bobName {
+		t.Fatalf("alice got %+v, want bob's message", onAlice)
+	}
+	// Carol is not in the thread. Her next event has to be the room sentinel,
+	// which it cannot be if the direct message reached her.
+	nextIs(t, carolWS, aliceWS, "carol is not in the thread")
+	read(t, aliceWS) // alice's own sentinel
+	read(t, bobWS)   // and bob's copy of it
+
+	// And it is not in the shared room's history either.
+	room, err := m.repo.Room(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("room: %v", err)
+	}
+	for _, msg := range room {
+		if msg.ID == onBob.ID {
+			t.Fatal("a direct message showed up in the shared room")
+		}
+	}
+
+	// The thread reads the same from both ends, whichever direction it went.
+	fromAlice, err := m.repo.Thread(context.Background(), alice, bob, 0)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	fromBob, err := m.repo.Thread(context.Background(), bob, alice, 0)
+	if err != nil {
+		t.Fatalf("thread reversed: %v", err)
+	}
+	if len(fromAlice) != len(fromBob) || len(fromAlice) == 0 {
+		t.Fatalf("thread is not symmetric: %d vs %d", len(fromAlice), len(fromBob))
+	}
+}
+
+// Editing and deleting belong to the author and nobody else, and the change has
+// to reach the same people the message did.
+func TestEditAndDeleteAreTheAuthorsAlone(t *testing.T) {
+	db := openDB(t)
+	gin.SetMode(gin.TestMode)
+
+	alice, _ := seedUser(t, db)
+	bob, _ := seedUser(t, db)
+
+	m := New(db, Config{SessionWindow: time.Minute})
+	srv, dial := serve(t, m)
+	defer srv.Close()
+
+	aliceWS := dial(t, alice)
+	defer aliceWS.Close()
+	bobWS := dial(t, bob)
+	defer bobWS.Close()
+	waitFor(t, func() bool { return m.hub.Count() == 2 })
+
+	send(t, aliceWS, "bản gốc")
+	sent := read(t, aliceWS).Message
+	read(t, bobWS) // bob sees it too
+
+	// Bob is not the author. Nothing happens, and nothing is broadcast.
+	ask(t, bobWS, incoming{Kind: "edit", ID: sent.ID, Body: "bob viết đè"})
+	ask(t, bobWS, incoming{Kind: "delete", ID: sent.ID})
+	nextIs(t, bobWS, aliceWS, "a non-author edit or delete must broadcast nothing")
+	read(t, aliceWS) // alice's own sentinel
+
+	after, err := m.repo.ByID(context.Background(), sent.ID)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if after.Body != "bản gốc" || after.EditedAt != nil || after.DeletedAt != nil {
+		t.Fatalf("message = %+v, want untouched by somebody who did not write it", after)
+	}
+
+	// The author can, and both ends see the update.
+	ask(t, aliceWS, incoming{Kind: "edit", ID: sent.ID, Body: "đã sửa"})
+	ev := read(t, aliceWS)
+	if ev.Kind != "update" || ev.Message.Body != "đã sửa" || ev.Message.EditedAt == nil {
+		t.Fatalf("edit event = %+v, want an update carrying edited_at", ev)
+	}
+	if onBob := read(t, bobWS); onBob.Message.Body != "đã sửa" {
+		t.Fatalf("bob saw %+v, want the edit", onBob.Message)
+	}
+
+	// Deleting keeps the row and drops the text — the id has to survive so
+	// everyone else's scroll position does not jump.
+	ask(t, aliceWS, incoming{Kind: "delete", ID: sent.ID})
+	gone := read(t, aliceWS).Message
+	if gone.ID != sent.ID {
+		t.Fatalf("delete changed the id: %d became %d", sent.ID, gone.ID)
+	}
+	if gone.DeletedAt == nil || gone.Body != "" {
+		t.Fatalf("deleted message = %+v, want an empty body and a tombstone", gone)
+	}
+	read(t, bobWS)
+
+	// Editing something already taken back would put the text back on the
+	// screen of anyone who had not reloaded.
+	ask(t, aliceWS, incoming{Kind: "edit", ID: sent.ID, Body: "quay lại"})
+	nextIs(t, aliceWS, bobWS, "a deleted message must not be editable")
+	read(t, bobWS) // bob's own sentinel
+	final, err := m.repo.ByID(context.Background(), sent.ID)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if final.Body != "" {
+		t.Fatalf("deleted message came back as %q", final.Body)
+	}
+}
+
+// Paging backwards through a thread: the cursor must hand back the next page
+// with nothing repeated and nothing skipped, which is what a scroll upward
+// stitches together.
+func TestThreadPagesBackwards(t *testing.T) {
+	db := openDB(t)
+	alice, aliceName := seedUser(t, db)
+	bob, _ := seedUser(t, db)
+
+	repo := NewRepo(db)
+	const extra = 5
+	for i := 0; i < HistoryLimit+extra; i++ {
+		m := &Message{UserID: &alice, Username: aliceName, PeerID: &bob,
+			Body: fmt.Sprintf("tin %d", i)}
+		if err := repo.Save(context.Background(), m); err != nil {
+			t.Fatalf("seed %d: %v", i, err)
+		}
+	}
+
+	newest, err := repo.Thread(context.Background(), alice, bob, 0)
+	if err != nil {
+		t.Fatalf("newest page: %v", err)
+	}
+	if len(newest) != HistoryLimit {
+		t.Fatalf("newest page has %d messages, want %d", len(newest), HistoryLimit)
+	}
+	// Oldest first, so the last one is the newest thing said.
+	if newest[len(newest)-1].Body != fmt.Sprintf("tin %d", HistoryLimit+extra-1) {
+		t.Fatalf("page is not oldest-first: ends with %q", newest[len(newest)-1].Body)
+	}
+
+	older, err := repo.Thread(context.Background(), alice, bob, newest[0].ID)
+	if err != nil {
+		t.Fatalf("older page: %v", err)
+	}
+	if len(older) != extra {
+		t.Fatalf("older page has %d messages, want %d", len(older), extra)
+	}
+	if older[len(older)-1].ID >= newest[0].ID {
+		t.Fatalf("pages overlap: older ends at %d, newer starts at %d",
+			older[len(older)-1].ID, newest[0].ID)
+	}
+
+	// Past the beginning is empty, not the newest page again.
+	none, err := repo.Thread(context.Background(), alice, bob, older[0].ID)
+	if err != nil {
+		t.Fatalf("past the start: %v", err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("reading past the oldest message returned %d rows", len(none))
+	}
 }
