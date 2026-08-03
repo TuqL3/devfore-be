@@ -20,8 +20,14 @@ const (
 	pidsLimit   = 256
 	// Both mounts are wiped when the container goes. Nothing a student writes is
 	// meant to outlive the session, and the check scripts run before it ends.
-	tmpMount  = "rw,noexec,nosuid,size=64m"
-	homeMount = "rw,nosuid,size=64m,uid=1000,gid=1000"
+	tmpMount = "rw,noexec,nosuid,size=64m"
+	// `exec` is spelled out because docker adds noexec to every --tmpfs unless
+	// told otherwise, and a home that cannot run a file is a Linux course that
+	// cannot teach `chmod +x`. Safe on its own terms: the mount is nosuid, the
+	// root filesystem is read-only, every capability is dropped and there is no
+	// network to fetch a binary from — the only thing runnable here is something
+	// the student typed.
+	homeMount = "rw,exec,nosuid,size=64m,uid=1000,gid=1000"
 	homeDir   = "/home/student"
 	// The image's own user. Repeated here so a rebuilt image that forgets USER
 	// still cannot hand anyone root.

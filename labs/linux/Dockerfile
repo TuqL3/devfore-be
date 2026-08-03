@@ -1,5 +1,8 @@
 # Image for the Linux course labs. Whatever a student types runs in here, so it
 # carries a shell and coreutils and nothing else worth reaching for.
+#
+# Built with `labs/` as the context, not this directory: the rc file below is
+# shared by every lab image, and a copy per image is a copy that drifts.
 FROM alpine:3.21
 
 RUN apk add --no-cache bash coreutils findutils grep less nano \
