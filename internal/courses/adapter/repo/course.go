@@ -164,20 +164,26 @@ func (r *CourseRepo) LabBySlug(ctx context.Context, courseID int64, slug string)
 // Go, where a later refactor could forget.
 func (r *CourseRepo) TasksByLab(ctx context.Context, labID int64) ([]domain.Task, error) {
 	rows := []struct {
-		ID       int64
-		Title    string
-		Hint     string
-		Points   int
-		OrderIdx int
-		Kind     string
-		Options  []byte
+		ID           int64
+		Title        string
+		Hint         string
+		Points       int
+		OrderIdx     int
+		Kind         string
+		Options      []byte
+		SingleAnswer bool
 	}{}
 	err := r.db.WithContext(ctx).Raw(
 		`SELECT id, title, hint, points, order_idx, kind,
 		        COALESCE(
 		          (SELECT jsonb_agg(o->'text') FROM jsonb_array_elements(options) o),
 		          '[]'::jsonb
-		        ) AS options
+		        ) AS options,
+		        -- How MANY options are right, reduced to one bit before it
+		        -- leaves SQL: enough to pick a radio over a checkbox, never
+		        -- enough to say which one.
+		        (SELECT count(*) FROM jsonb_array_elements(options) o
+		          WHERE (o->>'correct')::boolean) = 1 AS single_answer
 		   FROM lab_tasks
 		  WHERE lab_id = ? ORDER BY order_idx, id`, labID,
 	).Scan(&rows).Error
@@ -188,13 +194,14 @@ func (r *CourseRepo) TasksByLab(ctx context.Context, labID int64) ([]domain.Task
 	tasks := make([]domain.Task, len(rows))
 	for i, row := range rows {
 		t := domain.Task{
-			ID:       row.ID,
-			Title:    row.Title,
-			Hint:     row.Hint,
-			Points:   row.Points,
-			OrderIdx: row.OrderIdx,
-			Kind:     row.Kind,
-			Options:  []string{},
+			ID:           row.ID,
+			Title:        row.Title,
+			Hint:         row.Hint,
+			Points:       row.Points,
+			OrderIdx:     row.OrderIdx,
+			Kind:         row.Kind,
+			Options:      []string{},
+			SingleAnswer: row.SingleAnswer,
 		}
 		if len(row.Options) > 0 {
 			if err := json.Unmarshal(row.Options, &t.Options); err != nil {

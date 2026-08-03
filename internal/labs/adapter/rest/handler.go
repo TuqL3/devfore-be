@@ -9,15 +9,22 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/devforge/be/internal/audit"
 	"github.com/devforge/be/internal/labs/domain"
 	"github.com/devforge/be/internal/labs/usecase"
 )
 
 type Handler struct {
-	uc *usecase.Labs
+	uc    *usecase.Labs
+	audit *audit.Recorder
 }
 
 func NewHandler(uc *usecase.Labs) *Handler { return &Handler{uc: uc} }
+
+// SetAudit hands the handler the recorder for the one endpoint that ends
+// somebody else's work. Set after construction so labs and audit stay
+// independent packages rather than a pair with a wiring order.
+func (h *Handler) SetAudit(a *audit.Recorder) { h.audit = a }
 
 type sessionResponse struct {
 	ID    string `json:"id"`
@@ -43,7 +50,7 @@ type sessionResponse struct {
 // that awards nothing the second time.
 func (h *Handler) respondSession(c *gin.Context, code int, s *domain.Session) {
 	res := newSessionResponse(s)
-	ids, err := h.uc.PassedTaskIDs(c.Request.Context(), userID(c), s.LabID)
+	ids, err := h.uc.PassedTaskIDs(c.Request.Context(), s.ID)
 	if err != nil {
 		slog.Error("read lab progress", "session", s.ID, "err", err)
 	} else {
@@ -95,7 +102,7 @@ func (h *Handler) Current(c *gin.Context) {
 		serverError(c, err)
 	default:
 		res := newSessionResponse(s)
-		if ids, err := h.uc.PassedTaskIDs(c.Request.Context(), userID(c), s.LabID); err != nil {
+		if ids, err := h.uc.PassedTaskIDs(c.Request.Context(), s.ID); err != nil {
 			slog.Error("read lab progress", "session", s.ID, "err", err)
 		} else {
 			res.PassedTaskIDs = ids

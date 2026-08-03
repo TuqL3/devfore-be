@@ -7,7 +7,12 @@ var (
 	ErrNotFound       = errors.New("session not found")
 	ErrAlreadyRunning = errors.New("a session is already running")
 	ErrNotRunning     = errors.New("session is not running")
-	ErrTaskNotFound   = errors.New("task not found")
+	// Handing in with tasks still unpassed.
+	ErrIncomplete = errors.New("lab is not finished")
+	// Asking for the report of a session still in progress. The report carries
+	// the answer key, so it is only assembled once the attempt is over.
+	ErrStillRunning = errors.New("session is still running")
+	ErrTaskNotFound = errors.New("task not found")
 	// A task that exists but belongs to another lab. Kept apart from "not found"
 	// because it is a client sending the wrong id, not a missing row.
 	ErrTaskNotInLab = errors.New("task does not belong to this lab")

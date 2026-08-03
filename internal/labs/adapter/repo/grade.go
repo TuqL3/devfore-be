@@ -93,12 +93,14 @@ func (r *GradeRepo) LabImage(ctx context.Context, labID int64) (string, error) {
 }
 
 // PassedTaskIDs is what the lab screen restores its ticks from after a reload.
-func (r *GradeRepo) PassedTaskIDs(ctx context.Context, userID, labID int64) ([]int64, error) {
+// Scoped to the session, not to the user: lab_task_completions says a task was
+// passed at some point ever, and using that here marked questions done in a
+// brand new attempt — the student saw "next question" on a question this
+// attempt has no answer for, and the report had none either.
+func (r *GradeRepo) PassedTaskIDs(ctx context.Context, sessionID string) ([]int64, error) {
 	ids := []int64{}
 	err := r.db.WithContext(ctx).Raw(
-		`SELECT c.task_id FROM lab_task_completions c
-		   JOIN lab_tasks t ON t.id = c.task_id
-		  WHERE c.user_id = ? AND t.lab_id = ?`, userID, labID,
+		`SELECT task_id FROM lab_answers WHERE session_id = ? AND passed`, sessionID,
 	).Scan(&ids).Error
 	return ids, err
 }
@@ -108,11 +110,44 @@ func (r *GradeRepo) PassedTaskIDs(ctx context.Context, userID, labID int64) ([]i
 // three writes describing one event, and a crash between them would leave a
 // student with points for a task the table says they never passed.
 func (r *GradeRepo) Record(
-	ctx context.Context, userID int64, sessionID string, t *domain.Task, passed bool,
+	ctx context.Context, userID int64, sessionID string, t *domain.Task,
+	selected []int, passed bool,
 ) (domain.Grade, error) {
 	out := domain.Grade{Passed: passed}
 
-	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	// Marshalled outside the transaction so a broken payload fails before any
+	// of it is written. Never nil: the column is NOT NULL and a script task
+	// legitimately has nothing selected.
+	if selected == nil {
+		selected = []int{}
+	}
+	picked, err := json.Marshal(selected)
+	if err != nil {
+		return domain.Grade{}, fmt.Errorf("ghi đáp án nhiệm vụ %d: %w", t.ID, err)
+	}
+
+	err = r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// What the report reads. Written on every press, passing or not: a
+		// wrong answer left as the student's last one is the answer they gave.
+		//
+		// attempts is the one thing here the row cannot rebuild from its own
+		// contents. Everything else is overwritten by the next press, so a task
+		// the student got wrong four times before fixing it looks, at hand-in,
+		// exactly like one they got right immediately. COALESCE covers rows
+		// written before the column existed: they count from one rather than
+		// staying null forever once touched again.
+		if err := tx.Exec(
+			`INSERT INTO lab_answers (session_id, task_id, selected, passed, attempts)
+			 VALUES (?, ?, ?, ?, 1)
+			 ON CONFLICT (session_id, task_id) DO UPDATE
+			 SET selected = EXCLUDED.selected, passed = EXCLUDED.passed,
+			     attempts = COALESCE(lab_answers.attempts, 1) + 1,
+			     answered_at = now()`,
+			sessionID, t.ID, string(picked), passed,
+		).Error; err != nil {
+			return err
+		}
+
 		// Every press counts as an attempt, passing or not — that is what the
 		// number means on the leaderboard. It also creates the row the score
 		// update below relies on existing.

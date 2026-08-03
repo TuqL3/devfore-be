@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/devforge/be/internal/audit"
 	"github.com/devforge/be/internal/auth/domain"
 	"github.com/devforge/be/internal/auth/usecase"
 )
@@ -19,6 +20,7 @@ type Handler struct {
 	uploadDir   string
 	publicURL   string
 	cookies     CookieConfig
+	audit       *audit.Recorder
 }
 
 func NewHandler(auth *usecase.Auth, frontendURL, uploadDir, publicURL string, cookies CookieConfig) *Handler {
@@ -123,6 +125,12 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 	}
 }
 
+// SetAudit hands the handler the recorder for the moderation endpoints. Set
+// after construction rather than passed in: audit imports nothing from auth, and
+// auth taking it as a constructor argument would make the two packages a pair
+// that has to be wired in one order.
+func (h *Handler) SetAudit(a *audit.Recorder) { h.audit = a }
+
 func (h *Handler) Login(c *gin.Context) {
 	var req loginRequest
 	if !bind(c, &req) {
@@ -140,6 +148,14 @@ func (h *Handler) Login(c *gin.Context) {
 		abort(c, http.StatusTooManyRequests, "đăng nhập sai quá nhiều lần, vui lòng đợi rồi thử lại")
 	case err != nil:
 		serverError(c, err)
+	// A second factor stops the login here. No cookie is set: the password was
+	// right, which on its own is not a session on this account.
+	case out.Challenge != nil:
+		c.JSON(http.StatusOK, challengeResponse{
+			MFARequired: true,
+			Challenge:   out.Challenge.Token,
+			ExpiresIn:   int(out.Challenge.TTL.Seconds()),
+		})
 	default:
 		setCredentials(c, out.Credentials, h.cookies)
 		c.JSON(http.StatusOK, newUserResponse(out.User))

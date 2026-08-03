@@ -7,12 +7,12 @@ import (
 )
 
 type courseSummary struct {
-	ID           int64      `json:"id"`
-	Slug         string     `json:"slug"`
-	Title        string     `json:"title"`
-	Description  string     `json:"description"`
-	ImageURL *string `json:"image_url"`
-	Level    string  `json:"level"`
+	ID          int64   `json:"id"`
+	Slug        string  `json:"slug"`
+	Title       string  `json:"title"`
+	Description string  `json:"description"`
+	ImageURL    *string `json:"image_url"`
+	Level       string  `json:"level"`
 	// Public listings only ever contain published courses, so this is here for
 	// the admin one, where telling a draft from a live course is the point.
 	Status       string     `json:"status"`
@@ -95,6 +95,8 @@ type taskResponse struct {
 	// server when the answer is submitted; sending it here would put the answer
 	// key in the page the question is asked on.
 	Options []string `json:"options"`
+	// Whether the question takes one answer or several. How many, not which.
+	SingleAnswer bool `json:"single_answer"`
 }
 
 type labDetail struct {
@@ -110,13 +112,14 @@ func newLabDetail(l *domain.Lab) labDetail {
 			options = []string{}
 		}
 		tasks[i] = taskResponse{
-			ID:       t.ID,
-			Title:    t.Title,
-			Hint:     t.Hint,
-			Points:   t.Points,
-			OrderIdx: t.OrderIdx,
-			Kind:     t.Kind,
-			Options:  options,
+			ID:           t.ID,
+			Title:        t.Title,
+			Hint:         t.Hint,
+			Points:       t.Points,
+			OrderIdx:     t.OrderIdx,
+			Kind:         t.Kind,
+			Options:      options,
+			SingleAnswer: t.SingleAnswer,
 		}
 	}
 	return labDetail{

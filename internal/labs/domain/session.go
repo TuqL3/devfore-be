@@ -8,6 +8,9 @@ const (
 	StatusRunning Status = "running"
 	StatusEnded   Status = "ended"
 	StatusExpired Status = "expired"
+	// Handed in by the student. Ends the session like the two above, and is kept
+	// apart from them because only this one means the answers were final.
+	StatusSubmitted Status = "submitted"
 )
 
 type Session struct {

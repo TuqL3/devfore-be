@@ -12,7 +12,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/devforge/be/internal/audit"
 	"github.com/devforge/be/internal/auth"
+	"github.com/devforge/be/internal/chat"
 	"github.com/devforge/be/internal/config"
 	"github.com/devforge/be/internal/courses"
 	"github.com/devforge/be/internal/db"
@@ -72,6 +74,12 @@ func run() error {
 		ResetTokenTTL:      cfg.ResetTokenTTL,
 		ResendCooldown:     cfg.ResendCooldown,
 	})
+	// The room's connections are capped at one access-token lifetime, so a
+	// banned account cannot keep talking on a socket opened before the ban.
+	chatMod := chat.New(gdb, chat.Config{
+		AllowedOrigins: cfg.CORSOrigins,
+		SessionWindow:  cfg.AccessTTL,
+	})
 	coursesMod := courses.New(gdb, courses.Config{
 		UploadDir: cfg.UploadDir,
 		PublicURL: cfg.PublicURL,
@@ -93,10 +101,17 @@ func run() error {
 	defer labsMod.Close()
 	labsMod.StartReaper(reaperCtx)
 
+	// Wired after both modules exist rather than into either constructor: audit
+	// is written to by both and owned by neither, and passing it in would force
+	// one of them to be built first for no reason other than this.
+	auditRec := audit.New(gdb)
+	authMod.SetAudit(auditRec)
+	labsMod.SetAudit(auditRec)
+
 	if cfg.IsProd() {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	r, err := newRouter(cfg, sqlDB, authMod, coursesMod, labsMod)
+	r, err := newRouter(cfg, sqlDB, authMod, coursesMod, labsMod, chatMod, auditRec)
 	if err != nil {
 		return err
 	}
