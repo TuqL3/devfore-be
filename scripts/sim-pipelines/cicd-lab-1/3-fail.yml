@@ -1,0 +1,7 @@
+# Đúng hình dạng của bài trước, chỉ thiếu dòng `cache`. Chạy bao nhiêu lượt thì
+# npm-ci vẫn cài lại từ đầu — cache không tự ấm, phải xin.
+jobs:
+  build:
+    steps: [checkout, npm-ci, npm-build]
+  test:
+    steps: [checkout, npm-ci, npm-test]

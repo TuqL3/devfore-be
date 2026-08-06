@@ -137,7 +137,11 @@ func (r *CourseRepo) BySlug(ctx context.Context, slug string) (*domain.Course, e
 func (r *CourseRepo) LabsByCourse(ctx context.Context, courseID int64) ([]domain.Lab, error) {
 	var labs []domain.Lab
 	err := r.db.WithContext(ctx).Raw(
+		// The scenario itself is not on the listing — only whether there is one.
+		// A course page showing ten labs has no use for ten catalogues, and the
+		// one screen that needs the answer only needs the bit.
 		`SELECT l.id, l.slug, l.title, l.description_md, l.duration_minutes, l.order_idx,
+			(l.sim_scenario IS NOT NULL)                                          AS is_sim,
 			(SELECT count(*) FROM lab_tasks t WHERE t.lab_id = l.id)               AS task_count,
 			COALESCE((SELECT sum(points) FROM lab_tasks t WHERE t.lab_id = l.id), 0) AS points
 		 FROM labs l WHERE l.course_id = ? ORDER BY l.order_idx, l.id`, courseID,
@@ -147,10 +151,17 @@ func (r *CourseRepo) LabsByCourse(ctx context.Context, courseID int64) ([]domain
 
 // Lab slugs are unique across the whole table, but the lookup is still scoped to
 // the course so a lab cannot be reached through the wrong course's URL.
+//
+// sim_scenario is the one authored field here that reaches the student, and only
+// on this query rather than on the course listing beside it: a pipeline is
+// written against the catalogue of steps and the runner count, so withholding
+// them would leave the editor with nothing to offer. lab_image_id stays out —
+// which image a lab runs is an authoring detail.
 func (r *CourseRepo) LabBySlug(ctx context.Context, courseID int64, slug string) (*domain.Lab, error) {
 	var lab domain.Lab
 	res := r.db.WithContext(ctx).Raw(
 		`SELECT l.id, l.slug, l.title, l.description_md, l.duration_minutes, l.order_idx,
+			l.sim_scenario, (l.sim_scenario IS NOT NULL) AS is_sim,
 			(SELECT count(*) FROM lab_tasks t WHERE t.lab_id = l.id)                 AS task_count,
 			COALESCE((SELECT sum(points) FROM lab_tasks t WHERE t.lab_id = l.id), 0) AS points
 		 FROM labs l WHERE l.course_id = ? AND l.slug = ?`, courseID, slug,

@@ -1,0 +1,8 @@
+# deploy không khai needs nên nó chạy bình thường trên runner thứ hai: status
+# success, không phải skipped. Pipeline vẫn đỏ vì migrate đỏ — nên đây là chỗ
+# chứng minh điều kiện chấm hỏi đúng trạng thái của từng job, không chỉ của lượt.
+jobs:
+  migrate:
+    steps: [checkout, migrate]
+  deploy:
+    steps: [deploy]

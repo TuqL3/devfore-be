@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -21,8 +22,11 @@ type adminLab struct {
 	DurationMinutes int    `json:"duration_minutes"`
 	OrderIdx        int    `json:"order_idx"`
 	LabImageID      *int64 `json:"lab_image_id"`
-	TaskCount       int    `json:"task_count"`
-	Points          int    `json:"points"`
+	// null on a container lab. Sent back as JSON rather than as a string so the
+	// form can pretty-print it without parsing a string that happens to be JSON.
+	SimScenario json.RawMessage `json:"sim_scenario"`
+	TaskCount   int             `json:"task_count"`
+	Points      int             `json:"points"`
 }
 
 func newAdminLab(l domain.Lab) adminLab {
@@ -34,6 +38,7 @@ func newAdminLab(l domain.Lab) adminLab {
 		DurationMinutes: l.DurationMinutes,
 		OrderIdx:        l.OrderIdx,
 		LabImageID:      l.LabImageID,
+		SimScenario:     rawJSON(l.SimScenario),
 		TaskCount:       l.TaskCount,
 		Points:          l.Points,
 	}
@@ -57,6 +62,9 @@ type adminTask struct {
 	CheckScript      string        `json:"check_script"`
 	Options          []adminOption `json:"options"`
 	ExpectedCommands string        `json:"expected_commands"`
+	// The pass condition of a sim task. Same class of secret as check_script, and
+	// it travels the same single route: this response, behind the admin role.
+	SimGoal json.RawMessage `json:"sim_goal"`
 }
 
 func newAdminTask(t domain.AdminTask) adminTask {
@@ -74,7 +82,19 @@ func newAdminTask(t domain.AdminTask) adminTask {
 		CheckScript:      t.CheckScript,
 		Options:          options,
 		ExpectedCommands: t.ExpectedCommands,
+		SimGoal:          rawJSON(t.SimGoal),
 	}
+}
+
+// rawJSON turns a column's bytes into something json.Marshal will emit as JSON.
+// The nil check is not decoration: an empty, non-nil json.RawMessage fails to
+// marshal, which would take down the whole response over a column that is simply
+// unset.
+func rawJSON(b []byte) json.RawMessage {
+	if len(b) == 0 {
+		return nil
+	}
+	return json.RawMessage(b)
 }
 
 type labImageResponse struct {
@@ -86,12 +106,13 @@ type labImageResponse struct {
 }
 
 type labInput struct {
-	Slug            string `json:"slug"`
-	Title           string `json:"title"`
-	DescriptionMD   string `json:"description_md"`
-	DurationMinutes int    `json:"duration_minutes"`
-	LabImageID      *int64 `json:"lab_image_id"`
-	OrderIdx        int    `json:"order_idx"`
+	Slug            string          `json:"slug"`
+	Title           string          `json:"title"`
+	DescriptionMD   string          `json:"description_md"`
+	DurationMinutes int             `json:"duration_minutes"`
+	LabImageID      *int64          `json:"lab_image_id"`
+	SimScenario     json.RawMessage `json:"sim_scenario"`
+	OrderIdx        int             `json:"order_idx"`
 }
 
 func (in labInput) toDomain() domain.LabInput {
@@ -101,19 +122,21 @@ func (in labInput) toDomain() domain.LabInput {
 		DescriptionMD:   in.DescriptionMD,
 		DurationMinutes: in.DurationMinutes,
 		LabImageID:      in.LabImageID,
+		SimScenario:     in.SimScenario,
 		OrderIdx:        in.OrderIdx,
 	}
 }
 
 type taskInput struct {
-	Title            string        `json:"title"`
-	Hint             string        `json:"hint"`
-	Kind             string        `json:"kind"`
-	CheckScript      string        `json:"check_script"`
-	Options          []adminOption `json:"options"`
-	ExpectedCommands string        `json:"expected_commands"`
-	Points           int           `json:"points"`
-	OrderIdx         int           `json:"order_idx"`
+	Title            string          `json:"title"`
+	Hint             string          `json:"hint"`
+	Kind             string          `json:"kind"`
+	CheckScript      string          `json:"check_script"`
+	Options          []adminOption   `json:"options"`
+	ExpectedCommands string          `json:"expected_commands"`
+	SimGoal          json.RawMessage `json:"sim_goal"`
+	Points           int             `json:"points"`
+	OrderIdx         int             `json:"order_idx"`
 }
 
 func (in taskInput) toDomain() domain.TaskInput {
@@ -128,6 +151,7 @@ func (in taskInput) toDomain() domain.TaskInput {
 		CheckScript:      in.CheckScript,
 		Options:          options,
 		ExpectedCommands: in.ExpectedCommands,
+		SimGoal:          in.SimGoal,
 		Points:           in.Points,
 		OrderIdx:         in.OrderIdx,
 	}

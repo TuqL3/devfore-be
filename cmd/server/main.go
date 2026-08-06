@@ -90,10 +90,14 @@ func run() error {
 	reaperCtx, stopReaper := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopReaper()
 
-	labsMod, err := labs.New(reaperCtx, gdb, labs.Config{
-		DockerHost:     cfg.DockerHost,
-		SessionTTL:     cfg.LabSessionTTL,
-		AllowedOrigins: cfg.CORSOrigins,
+	labsMod, err := labs.New(reaperCtx, gdb, rdb, labs.Config{
+		DockerHost:      cfg.DockerHost,
+		SessionTTL:      cfg.LabSessionTTL,
+		AllowedOrigins:  cfg.CORSOrigins,
+		OpenRouterKey:   cfg.OpenRouterKey,
+		OpenRouterModel: cfg.OpenRouterModel,
+		PublicURL:       cfg.PublicURL,
+		AIDailyLimit:    cfg.AIDailyLimit,
 	})
 	if err != nil {
 		return err

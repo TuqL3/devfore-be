@@ -66,6 +66,12 @@ lab-images: ## Build 4 image lab (đã nằm trong `make migrate`)
 check-seed: ## Chạy mọi check_script trong seed thật sự trong container lab
 	bash scripts/check-seed.sh
 
+# Không cần docker: bài mô phỏng không có container nào để chạy vào. Cần
+# database vì kịch bản và điều kiện chấm là dữ liệu, không phải code.
+.PHONY: check-sim
+check-sim: ## Chấm thử mọi nhiệm vụ mô phỏng: pipeline sai phải trượt, pipeline đúng phải đậu
+	go run ./cmd/checksim
+
 .PHONY: air
 air: ## Chạy api hot reload (host, cần `make up` trước)
 	air

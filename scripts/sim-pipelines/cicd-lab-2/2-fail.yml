@@ -1,0 +1,6 @@
+# Gộp tất cả vào một job. Xanh, và còn NHANH hơn bản dịch đúng (300s so với 370s)
+# — nhưng nó không phải bản dịch của đoạn Actions kia, vì lint và test không hề
+# chạy song song. Đây là chỗ chứng minh điều kiện chấm nhìn vào lịch chạy.
+jobs:
+  ci:
+    steps: [checkout, npm-ci, lint, npm-test, npm-build]

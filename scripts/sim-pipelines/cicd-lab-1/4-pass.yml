@@ -1,0 +1,13 @@
+# Cả ba bài học cùng lúc: test chạy song song với build, cache làm npm-ci còn
+# 10 giây, và ship chỉ needs đúng job tạo ra `dist`.
+# build 0→75, test 0→135, ship 75→255. Tổng 255 ≤ 260.
+jobs:
+  build:
+    steps: [checkout, npm-ci, npm-build]
+    cache: [node_modules]
+  test:
+    steps: [checkout, npm-ci, npm-test]
+    cache: [node_modules]
+  ship:
+    needs: [build]
+    steps: [docker-build]

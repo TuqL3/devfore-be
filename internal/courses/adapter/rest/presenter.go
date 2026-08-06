@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/devforge/be/internal/courses/domain"
@@ -53,8 +54,11 @@ type labResponse struct {
 	DescriptionMD   string `json:"description_md"`
 	DurationMinutes int    `json:"duration_minutes"`
 	OrderIdx        int    `json:"order_idx"`
-	TaskCount       int    `json:"task_count"`
-	Points          int    `json:"points"`
+	// Whether starting this lab creates a container. On the listing so the dialog
+	// in front of Start stops promising one for a lab that simulates instead.
+	IsSim     bool `json:"is_sim"`
+	TaskCount int  `json:"task_count"`
+	Points    int  `json:"points"`
 }
 
 type courseDetail struct {
@@ -73,6 +77,7 @@ func newDetail(c *domain.Course) courseDetail {
 			DescriptionMD:   l.DescriptionMD,
 			DurationMinutes: l.DurationMinutes,
 			OrderIdx:        l.OrderIdx,
+			IsSim:           l.IsSim,
 			TaskCount:       l.TaskCount,
 			Points:          l.Points,
 		}
@@ -99,9 +104,18 @@ type taskResponse struct {
 	SingleAnswer bool `json:"single_answer"`
 }
 
+// labDetail is the lab screen. sim_scenario sits here and not on labResponse
+// because the course listing has no use for it, and because this is the one
+// response a student needs it in: the catalogue of steps and the runner count
+// are what a pipeline is written against.
+//
+// The pass condition is a different matter and has no field here at all —
+// domain.Task carries no goal, the same way it carries no check script, so there
+// is nothing for a later edit to accidentally wire up.
 type labDetail struct {
 	labResponse
-	Tasks []taskResponse `json:"tasks"`
+	SimScenario json.RawMessage `json:"sim_scenario"`
+	Tasks       []taskResponse  `json:"tasks"`
 }
 
 func newLabDetail(l *domain.Lab) labDetail {
@@ -130,10 +144,12 @@ func newLabDetail(l *domain.Lab) labDetail {
 			DescriptionMD:   l.DescriptionMD,
 			DurationMinutes: l.DurationMinutes,
 			OrderIdx:        l.OrderIdx,
+			IsSim:           l.IsSim,
 			TaskCount:       l.TaskCount,
 			Points:          l.Points,
 		},
-		Tasks: tasks,
+		SimScenario: rawJSON(l.SimScenario),
+		Tasks:       tasks,
 	}
 }
 

@@ -1,0 +1,7 @@
+# Hai job độc lập: migrate vẫn đỏ, unit vẫn chạy xong. Pipeline đỏ nhưng phần
+# việc đáng chạy đã chạy — đó là tất cả những gì bài này đòi.
+jobs:
+  migrate:
+    steps: [checkout, migrate]
+  unit:
+    steps: [checkout, npm-ci, unit]

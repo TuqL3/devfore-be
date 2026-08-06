@@ -1,0 +1,5 @@
+# Một job làm hết, nối tiếp: 455 giây. Chậm, nhưng xanh — đó là cả yêu cầu của
+# bài đầu tiên, và cũng là mốc để ba bài sau đo xuống.
+jobs:
+  ci:
+    steps: [checkout, npm-ci, npm-test, npm-build, docker-build]

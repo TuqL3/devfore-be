@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -14,6 +16,7 @@ import (
 	"github.com/devforge/be/internal/labs/adapter/dockerx"
 	"github.com/devforge/be/internal/labs/adapter/repo"
 	"github.com/devforge/be/internal/labs/domain"
+	"github.com/devforge/be/internal/labs/usecase/sim"
 )
 
 // checkTimeout bounds one run of a check script. The scripts are written by
@@ -22,15 +25,24 @@ import (
 // the container until the session expired.
 const checkTimeout = 10 * time.Second
 
+// MaxSimRuns bounds how many pipelines one session may simulate. A run is cheap
+// — no container, no network — but it is a row and an unbounded loop of them is
+// a client bug nobody would notice. A chosen number, not a measured one.
+const MaxSimRuns = 30
+
 type Labs struct {
 	repo    *repo.SessionRepo
 	grades  *repo.GradeRepo
+	sims    *repo.SimRepo
 	runtime *dockerx.Runtime
 	ttl     time.Duration
 }
 
-func NewLabs(r *repo.SessionRepo, g *repo.GradeRepo, rt *dockerx.Runtime, ttl time.Duration) *Labs {
-	return &Labs{repo: r, grades: g, runtime: rt, ttl: ttl}
+func NewLabs(
+	r *repo.SessionRepo, g *repo.GradeRepo, s *repo.SimRepo,
+	rt *dockerx.Runtime, ttl time.Duration,
+) *Labs {
+	return &Labs{repo: r, grades: g, sims: s, runtime: rt, ttl: ttl}
 }
 
 type StartOutput struct {
@@ -76,6 +88,13 @@ func (l *Labs) Start(ctx context.Context, userID int64, labSlug string) (StartOu
 		return StartOutput{}, err
 	}
 
+	// A sim lab is done here: the session is the whole of what it needs. The row
+	// keeps container_id empty, which is what every later branch reads to tell the
+	// two kinds apart — the reaper, Stop, Submit and Live all already ask.
+	if len(spec.SimScenario) > 0 {
+		return StartOutput{Session: s, Spec: spec}, nil
+	}
+
 	containerID, err := l.runtime.Create(ctx, id, spec.Image)
 	if err != nil {
 		// The row is holding the user's only slot for a container that does not
@@ -118,7 +137,10 @@ func (l *Labs) Live(ctx context.Context, sessionID string, userID int64) (*domai
 	if s.Status != domain.StatusRunning || time.Now().After(s.ExpiresAt) {
 		return nil, domain.ErrNotRunning
 	}
-	if !l.runtime.Alive(ctx, s.ContainerID) {
+	// A sim session has no container to ask after, and asking about the empty
+	// string would end every one of them on its first check. Same guard as end()
+	// and the reaper: an empty container id is the sim case, everywhere.
+	if s.ContainerID != "" && !l.runtime.Alive(ctx, s.ContainerID) {
 		// The container went without the row being updated — a student who killed
 		// their own PID 1, or a daemon restart. Settle the row so their slot frees.
 		_, _ = l.repo.End(ctx, s.ID, domain.StatusEnded)
@@ -254,6 +276,30 @@ func (l *Labs) Check(
 		return l.grades.Record(ctx, userID, s.ID, task, selected, sameAnswer(selected, task))
 	}
 
+	// A sim task is graded against a run this server produced, so there is
+	// nothing to look at in a container either — and there is no container.
+	if task.Kind == domain.KindSim {
+		run, err := l.sims.LatestRun(ctx, s.ID)
+		if err != nil {
+			// Including ErrNoSimRun, which the handler turns into "run the pipeline
+			// first". Recording a failure here would spend an attempt on a press of
+			// the wrong button.
+			return domain.Grade{}, err
+		}
+		var goal domain.Goal
+		// An empty column decodes to a goal with no clauses, which Eval refuses.
+		// That is the point: `{}` is what a half-written task looks like, and it
+		// must not pass anybody.
+		if err := json.Unmarshal(task.SimGoal, &goal); err != nil {
+			return domain.Grade{}, fmt.Errorf("đọc điều kiện chấm nhiệm vụ %d: %w", task.ID, err)
+		}
+		passed, err := sim.Eval(&goal, run.Result)
+		if err != nil {
+			return domain.Grade{}, err
+		}
+		return l.grades.Record(ctx, userID, s.ID, task, nil, passed)
+	}
+
 	// A command task asks for something that leaves no trace — uname, which, cat
 	// /proc/… — so the shell history is the only record that it was run.
 	if task.Kind == domain.KindCommand {
@@ -288,6 +334,70 @@ func (l *Labs) Check(
 		passed = code == 0
 	}
 	return l.grades.Record(ctx, userID, s.ID, task, nil, passed)
+}
+
+// SimRun simulates one pipeline and stores what happened. The engine is pure, so
+// everything that could vary is assembled here: the run number, the caches left
+// warm by the previous run, and the session id standing in as the seed. That is
+// what makes a stored result re-checkable — grading it now and grading it again
+// next week read the same run.
+func (l *Labs) SimRun(
+	ctx context.Context, sessionID string, userID int64, pipeline string,
+) (*domain.RunResult, error) {
+	s, err := l.Live(ctx, sessionID, userID)
+	if err != nil {
+		return nil, err
+	}
+	sc, err := l.sims.ScenarioByLab(ctx, s.LabID)
+	if err != nil {
+		return nil, err
+	}
+	// Authored, stored, and still checked. An author is trusted about what a lab
+	// should teach, not about having typed an extra zero into runner_count — and
+	// the engine reacts to that the same way whoever supplied it.
+	if err := sim.CheckScenario(sc); err != nil {
+		return nil, err
+	}
+
+	index, warm := 1, []string(nil)
+	prev, err := l.sims.LatestRun(ctx, s.ID)
+	switch {
+	case errors.Is(err, domain.ErrNoSimRun):
+		// First press. Nothing warm, and run numbers count from one.
+	case err != nil:
+		return nil, err
+	default:
+		if prev.RunIndex >= MaxSimRuns {
+			return nil, domain.ErrTooManyRuns
+		}
+		index, warm = prev.RunIndex+1, prev.Result.WarmCaches
+	}
+
+	// Parsed after the budget is checked, so a student who has run out is told
+	// that rather than being sent to fix a pipeline that would not be stored.
+	p, err := sim.Parse(pipeline, sc)
+	if err != nil {
+		return nil, err
+	}
+	res := sim.Run(sc, p, s.ID, index, warm)
+	if err := l.sims.SaveRun(ctx, s.ID, &domain.SimRun{
+		RunIndex: index, Pipeline: pipeline, Result: res,
+	}); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// SimRuns is the session's history. Owned rather than Live: looking back at what
+// was run is fair after the attempt is over, and the report already shows more.
+func (l *Labs) SimRuns(
+	ctx context.Context, sessionID string, userID int64,
+) ([]domain.SimRun, error) {
+	s, err := l.Owned(ctx, sessionID, userID)
+	if err != nil {
+		return nil, err
+	}
+	return l.sims.Runs(ctx, s.ID)
 }
 
 // sameAnswer compares what was ticked against the key. Partial credit is not a

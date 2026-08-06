@@ -1,0 +1,10 @@
+# Bản dịch đúng: lint và test là hai máy trắng chạy cùng lúc, build đợi cả hai.
+# Mỗi job trả checkout + npm-ci của riêng nó, y như Actions.
+jobs:
+  lint:
+    steps: [checkout, npm-ci, lint]
+  test:
+    steps: [checkout, npm-ci, npm-test]
+  build:
+    needs: [lint, test]
+    steps: [checkout, npm-ci, npm-build]

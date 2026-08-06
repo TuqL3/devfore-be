@@ -1,0 +1,7 @@
+# Đúng hình dạng của bài trước nhưng thiếu dòng cache: 390 giây, chạy bao nhiêu
+# lượt cũng vậy. Cache không tự ấm, phải xin.
+jobs:
+  test:
+    steps: [checkout, npm-ci, lint, unit, integration]
+  ship:
+    steps: [checkout, npm-ci, build, package]

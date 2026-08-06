@@ -11,7 +11,7 @@ import (
 // labCols is the admin view of a lab: the public one leaves out the image, and
 // the counts are read the same way the course page reads them.
 const labCols = `l.id, l.slug, l.title, l.description_md, l.duration_minutes, l.order_idx,
-	l.lab_image_id,
+	l.lab_image_id, l.sim_scenario,
 	(SELECT count(*) FROM lab_tasks t WHERE t.lab_id = l.id)                 AS task_count,
 	COALESCE((SELECT sum(points) FROM lab_tasks t WHERE t.lab_id = l.id), 0) AS points`
 
@@ -44,11 +44,13 @@ func (r *CourseRepo) AdminLab(ctx context.Context, labID int64) (*domain.Lab, er
 func (r *CourseRepo) CreateLab(ctx context.Context, courseID int64, in domain.LabInput) (*domain.Lab, error) {
 	var id int64
 	err := r.db.WithContext(ctx).Raw(
-		`INSERT INTO labs (course_id, slug, title, description_md, duration_minutes, lab_image_id, order_idx)
-		 VALUES (?, ?, ?, ?, ?, ?,
+		`INSERT INTO labs (course_id, slug, title, description_md, duration_minutes, lab_image_id,
+		                   sim_scenario, order_idx)
+		 VALUES (?, ?, ?, ?, ?, ?, ?::jsonb,
 		         COALESCE((SELECT max(order_idx) + 1 FROM labs WHERE course_id = ?), 0))
 		 RETURNING id`,
-		courseID, in.Slug, in.Title, in.DescriptionMD, in.DurationMinutes, in.LabImageID, courseID,
+		courseID, in.Slug, in.Title, in.DescriptionMD, in.DurationMinutes, in.LabImageID,
+		nullableJSON(in.SimScenario), courseID,
 	).Scan(&id).Error
 	if isSlugTaken(err) {
 		return nil, domain.ErrLabSlugTaken
@@ -62,9 +64,10 @@ func (r *CourseRepo) CreateLab(ctx context.Context, courseID int64, in domain.La
 func (r *CourseRepo) UpdateLab(ctx context.Context, labID int64, in domain.LabInput) (*domain.Lab, error) {
 	res := r.db.WithContext(ctx).Exec(
 		`UPDATE labs SET slug = ?, title = ?, description_md = ?, duration_minutes = ?,
-		        lab_image_id = ?, order_idx = ?, updated_at = now()
+		        lab_image_id = ?, sim_scenario = ?::jsonb, order_idx = ?, updated_at = now()
 		  WHERE id = ?`,
-		in.Slug, in.Title, in.DescriptionMD, in.DurationMinutes, in.LabImageID, in.OrderIdx, labID,
+		in.Slug, in.Title, in.DescriptionMD, in.DurationMinutes, in.LabImageID,
+		nullableJSON(in.SimScenario), in.OrderIdx, labID,
 	)
 	if isSlugTaken(res.Error) {
 		return nil, domain.ErrLabSlugTaken
@@ -103,6 +106,7 @@ type adminTaskRow struct {
 	CheckScript      string
 	Options          []byte
 	ExpectedCommands string
+	SimGoal          []byte
 }
 
 func (row adminTaskRow) toDomain() (domain.AdminTask, error) {
@@ -116,6 +120,7 @@ func (row adminTaskRow) toDomain() (domain.AdminTask, error) {
 		CheckScript:      row.CheckScript,
 		Options:          []domain.Option{},
 		ExpectedCommands: row.ExpectedCommands,
+		SimGoal:          row.SimGoal,
 	}
 	if len(row.Options) > 0 {
 		if err := json.Unmarshal(row.Options, &t.Options); err != nil {
@@ -126,7 +131,7 @@ func (row adminTaskRow) toDomain() (domain.AdminTask, error) {
 }
 
 const adminTaskCols = `id, title, hint, points, order_idx, kind, check_script, options,
-	expected_commands`
+	expected_commands, sim_goal`
 
 // AdminTasks is the one query that reads check_script and the correct flags out
 // of the database. It answers the admin editor, which has to show an author what
@@ -179,6 +184,26 @@ func optionsJSON(options []domain.Option) (string, error) {
 	return string(b), err
 }
 
+// nullableJSON hands the driver a NULL for an empty scenario rather than an empty
+// string, which `?::jsonb` would refuse. NULL is also the value every other query
+// reads to mean "container lab", so an author clearing the box turns the lab back
+// into one rather than leaving it in a third state.
+func nullableJSON(raw []byte) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return string(raw)
+}
+
+// goalJSON is the same idea for a column that is NOT NULL. A task with no goal
+// stores `{}`, which is what grading refuses — an unfinished task, said plainly.
+func goalJSON(raw []byte) string {
+	if len(raw) == 0 {
+		return "{}"
+	}
+	return string(raw)
+}
+
 func (r *CourseRepo) CreateTask(ctx context.Context, labID int64, in domain.TaskInput) (*domain.AdminTask, error) {
 	options, err := optionsJSON(in.Options)
 	if err != nil {
@@ -187,12 +212,12 @@ func (r *CourseRepo) CreateTask(ctx context.Context, labID int64, in domain.Task
 	var id int64
 	err = r.db.WithContext(ctx).Raw(
 		`INSERT INTO lab_tasks (lab_id, title, hint, points, kind, check_script, options,
-		                        expected_commands, order_idx)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?,
+		                        expected_commands, sim_goal, order_idx)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb,
 		         COALESCE((SELECT max(order_idx) + 1 FROM lab_tasks WHERE lab_id = ?), 0))
 		 RETURNING id`,
 		labID, in.Title, in.Hint, in.Points, in.Kind, in.CheckScript, options,
-		in.ExpectedCommands, labID,
+		in.ExpectedCommands, goalJSON(in.SimGoal), labID,
 	).Scan(&id).Error
 	if err != nil {
 		return nil, err
@@ -207,10 +232,11 @@ func (r *CourseRepo) UpdateTask(ctx context.Context, taskID int64, in domain.Tas
 	}
 	res := r.db.WithContext(ctx).Exec(
 		`UPDATE lab_tasks SET title = ?, hint = ?, points = ?, kind = ?,
-		        check_script = ?, options = ?, expected_commands = ?, order_idx = ?
+		        check_script = ?, options = ?, expected_commands = ?, sim_goal = ?::jsonb,
+		        order_idx = ?
 		  WHERE id = ?`,
 		in.Title, in.Hint, in.Points, in.Kind, in.CheckScript, options,
-		in.ExpectedCommands, in.OrderIdx, taskID,
+		in.ExpectedCommands, goalJSON(in.SimGoal), in.OrderIdx, taskID,
 	)
 	if res.Error != nil {
 		return nil, res.Error

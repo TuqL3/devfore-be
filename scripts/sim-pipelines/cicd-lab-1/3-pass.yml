@@ -1,0 +1,9 @@
+# Cả hai job cùng xin khoá `node_modules`. Lượt đầu vẫn trả đủ 90 giây; từ lượt
+# thứ hai npm-ci còn 10 giây, tổng 135.
+jobs:
+  build:
+    steps: [checkout, npm-ci, npm-build]
+    cache: [node_modules]
+  test:
+    steps: [checkout, npm-ci, npm-test]
+    cache: [node_modules]

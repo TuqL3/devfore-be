@@ -1,0 +1,8 @@
+# unit chờ migrate mà chẳng dùng gì của nó, nên migrate đỏ là unit chết theo:
+# skipped, không chạy giây nào. Đúng cái lỗi bài này bảo tránh.
+jobs:
+  migrate:
+    steps: [checkout, migrate]
+  unit:
+    needs: [migrate]
+    steps: [checkout, npm-ci, unit]

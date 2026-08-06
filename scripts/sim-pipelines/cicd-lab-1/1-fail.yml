@@ -1,0 +1,9 @@
+# Đủ cả hai job đúng tên, nhưng `needs` xếp chúng nối tiếp: build 0→155, test
+# 155→370. Không có lúc nào cả hai cùng chạy, nên jobs_parallel phải trượt —
+# đây là chỗ chứng minh điều kiện chấm nhìn vào lịch chạy, không nhìn vào tên.
+jobs:
+  build:
+    steps: [checkout, npm-ci, npm-build]
+  test:
+    needs: [build]
+    steps: [checkout, npm-ci, npm-test]

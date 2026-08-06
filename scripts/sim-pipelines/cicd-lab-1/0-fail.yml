@@ -1,0 +1,5 @@
+# docker-build đứng trước npm-build, nên `dist` chưa tồn tại lúc nó cần.
+# Job đỏ ngay tại đó, và điều kiện chấm đòi pipeline xanh.
+jobs:
+  ci:
+    steps: [checkout, npm-ci, docker-build, npm-build]

@@ -44,7 +44,11 @@ VALUES
     ('mang-may-tinh', 'Mạng Máy Tính Cơ Bản',
      'Từ địa chỉ IP tới HTTP: giao diện, cổng, socket, mô hình phân tầng, DNS, client–server và chia mạng con — làm tay trên loopback.',
      'beginner', 'published', now(),
-     'https://images.unsplash.com/photo-1544197150-b99a580bb7a8?w=800')
+     'https://images.unsplash.com/photo-1544197150-b99a580bb7a8?w=800'),
+    ('ci-cd-co-ban', 'CI/CD Cơ Bản',
+     'Vì sao pipeline 8 phút xuống còn 4: job phụ thuộc nhau, chạy song song, cache và artifact — học trên một trình mô phỏng, không cần runner thật.',
+     'intermediate', 'published', now(),
+     'https://images.unsplash.com/photo-1667372393119-3d4c48d07fc9?w=800')
 ON CONFLICT (slug) DO NOTHING;
 
 -- ===========================================================================
@@ -2109,6 +2113,135 @@ có ai nghe không → ứng dụng trả lời gì.$md$)
 ) AS v(idx, title, body) ON true
 WHERE c.slug = 'mang-may-tinh'
 AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.course_id = c.id AND r.order_idx = v.idx);
+
+
+-- ===========================================================================
+-- CI/CD CƠ BẢN
+--
+-- Khoá duy nhất không chạy container. Không có gì để `docker exec` vào: học
+-- viên viết pipeline, server mô phỏng lịch chạy, và điều kiện đạt nói về lịch
+-- chạy đó chứ không về văn bản họ gõ. Xem SIM-CICD.md.
+--
+-- Mọi con số trong catalog là do tác giả gõ ra, không đo từ CI thật. Bài học
+-- nằm ở TỈ LỆ — hai job song song xong nhanh gấp đôi nối tiếp, cache hit rẻ hơn
+-- cài lại một bậc — chứ không ở giá trị tuyệt đối.
+--
+-- `make check-sim` chạy mỗi nhiệm vụ với một pipeline sai (phải trượt) và một
+-- pipeline đúng (phải đậu), lấy từ scripts/sim-pipelines/.
+-- ===========================================================================
+
+INSERT INTO labs (course_id, slug, title, description_md, duration_minutes, sim_scenario, order_idx)
+SELECT c.id, v.slug, v.title, v.body, v.minutes, v.scenario::jsonb, v.idx
+FROM courses c
+JOIN (VALUES
+    ('cicd-lab-1', 'Pipeline Đầu Tiên', 60, 0, $scenario${
+      "version": 1,
+      "runner_count": 2,
+      "cache_restore_seconds": 10,
+      "catalog": {
+        "checkout":     { "seconds": 5 },
+        "npm-ci":       { "seconds": 90, "cacheable": "node_modules" },
+        "lint":         { "seconds": 25 },
+        "npm-test":     { "seconds": 120 },
+        "npm-build":    { "seconds": 60, "produces": "dist" },
+        "docker-build": { "seconds": 180, "consumes": "dist" }
+      }
+    }$scenario$, $md$# Pipeline đầu tiên
+
+Bài này **không có terminal**. Bạn viết một file pipeline, bấm *Chạy pipeline*,
+và server mô phỏng lịch chạy rồi vẽ ra: job nào chạy lúc nào, trên runner nào,
+mất bao lâu.
+
+> Số giây ở đây là **thời gian mô phỏng**, không đo từ CI thật. Thứ đáng học là
+> tỉ lệ giữa các cách xếp job, không phải con số tuyệt đối.
+
+## Hình dạng file
+
+```yaml
+jobs:
+  build:                       # tên job, bạn tự đặt
+    steps: [checkout, npm-ci]  # chạy lần lượt từ trái sang phải
+  test:
+    needs: [build]             # đợi build xong mới bắt đầu
+    steps: [checkout, npm-test]
+    cache: [node_modules]      # xin dùng lại cache của khoá này
+```
+
+Chỉ có ba khoá: `steps`, `needs`, `cache`. Gõ sai tên khoá thì server báo lỗi
+kèm số dòng — nó **không** bỏ qua im lặng.
+
+## Bốn luật quyết định mọi thứ
+
+**1. Job không có `needs` thì chạy ngay.** Lab này có **2 runner**, nên tối đa
+hai job chạy cùng lúc. Job thứ ba phải đợi một runner rảnh.
+
+**2. `needs` là lời hứa "tôi cần thứ job kia để lại".** Thêm một dòng `needs`
+không cần thiết là tự bắt mình xếp hàng: hai job đáng ra chạy song song thì nay
+nối tiếp, và pipeline dài gấp đôi mà không an toàn hơn chút nào.
+
+**3. Artifact phải tới được.** `docker-build` cần thư mục `dist` do `npm-build`
+tạo ra. Nó tìm `dist` ở hai chỗ: một step trước đó **trong cùng job** (cùng một
+workspace), hoặc một job nằm trong chuỗi `needs` của nó. Job chạy trước ở nhánh
+khác **không tính** — đĩa của runner đó không phải đĩa này.
+
+**4. Cache chỉ ấm sang lượt sau.** Khai `cache: [node_modules]` thì lượt chạy
+**kế tiếp** mới được giảm giá, lượt đang chạy thì không. Khai xong nhớ bấm Chạy
+thêm một lượt nữa.
+
+## Step có sẵn
+
+| Step | Giây | Ghi chú |
+| --- | --- | --- |
+| `checkout` | 5 | lấy code |
+| `npm-ci` | 90 | cài thư viện — cache được bằng khoá `node_modules` |
+| `lint` | 25 | soi code |
+| `npm-test` | 120 | chạy test |
+| `npm-build` | 60 | build, **tạo ra** `dist` |
+| `docker-build` | 180 | đóng image, **cần** `dist` |
+
+Bảng này cũng nằm ngay trên ô soạn thảo — không cần nhớ.$md$)
+) AS v(slug, title, minutes, idx, scenario, body) ON true
+WHERE c.slug = 'ci-cd-co-ban'
+ON CONFLICT (slug) DO NOTHING;
+
+-- --- cicd-lab-1 ------------------------------------------------------------
+-- Bốn nhiệm vụ mô phỏng theo đúng thứ tự bài học muốn dạy, và một câu lý thuyết
+-- xen giữa. Nhiệm vụ cuối đòi cả ba thứ cùng lúc: 260 giây không đạt được nếu
+-- thiếu song song hay thiếu cache (xem con số trong SIM-CICD.md).
+INSERT INTO lab_tasks (lab_id, title, hint, points, kind, check_script, expected_commands, options, sim_goal, order_idx)
+SELECT l.id, v.title, v.hint, 10, v.kind, '', '', v.opts::jsonb, v.goal::jsonb, v.idx
+FROM labs l
+JOIN (VALUES
+    (0, 'Viết một job tên `ci` chạy trọn vẹn: lấy code, cài, test, build, đóng image. Pipeline phải xanh.',
+     'Năm step trong một job, thứ tự quan trọng: `docker-build` cần `dist`, mà `dist` do `npm-build` tạo ra.',
+     'sim', '[]',
+     '{"all": [{"run_status": "success"}, {"job_present": "ci"}]}'),
+
+    (1, 'Tách thành hai job `test` và `build` chạy **cùng lúc**. Pipeline vẫn phải xanh.',
+     'Bỏ `needs` đi thì hai job cùng sẵn sàng từ giây 0, và lab này có 2 runner. Cả hai đều cần `checkout` và `npm-ci` của riêng mình.',
+     'sim', '[]',
+     '{"all": [{"run_status": "success"}, {"jobs_parallel": ["test", "build"]}]}'),
+
+    (2, 'Job `test` không dùng gì do `build` tạo ra. Thêm `needs: [build]` vào `test` thì điều gì xảy ra?',
+     '', 'choice',
+     '[{"text": "test phải đợi build xong mới chạy, pipeline dài thêm mà không an toàn hơn", "correct": true},
+       {"text": "test chạy nhanh hơn vì build đã cài sẵn thư viện cho nó", "correct": false},
+       {"text": "Không có gì đổi, needs chỉ để người đọc biết thứ tự", "correct": false},
+       {"text": "build và test vẫn chạy song song, needs chỉ tính khi có artifact", "correct": false}]',
+     '{}'),
+
+    (3, 'Khai cache `node_modules` cho cả hai job, rồi chạy lại để `npm-ci` được dùng cache.',
+     'Thêm `cache: [node_modules]` vào từng job. Lượt đầu vẫn cài đủ 90 giây — cache chỉ ấm sang lượt sau, nên bấm Chạy thêm một lượt nữa.',
+     'sim', '[]',
+     '{"all": [{"run_status": "success"}, {"cache_hit": "node_modules"}]}'),
+
+    (4, 'Thêm job `ship` đóng image, và đưa cả pipeline xuống dưới 260 giây.',
+     '`ship` cần `dist`, nên nó phải `needs` job đã tạo ra `dist` — chỉ job đó thôi, thêm nữa là tự bắt mình xếp hàng. Giữ nguyên cache của bài trước.',
+     'sim', '[]',
+     '{"all": [{"run_status": "success"}, {"job_present": "ship"}, {"total_seconds_lte": 260}]}')
+) AS v(idx, title, hint, kind, opts, goal) ON true
+WHERE l.slug = 'cicd-lab-1'
+AND NOT EXISTS (SELECT 1 FROM lab_tasks t WHERE t.lab_id = l.id AND t.order_idx = v.idx);
 
 -- Không seed tài khoản nào. Hai tài khoản một máy mới cần — một admin, một học
 -- viên — do migration 000020 tạo, nên chúng tồn tại kể cả khi file này không
