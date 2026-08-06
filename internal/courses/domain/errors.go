@@ -10,8 +10,9 @@ var (
 	ErrSlugTaken = errors.New("course slug already exists")
 	// Lab slugs are unique across the whole table, not per course, because the
 	// lab session lookup addresses them on their own.
-	ErrLabSlugTaken = errors.New("lab slug already exists")
-	ErrTaskNotFound = errors.New("task not found")
+	ErrLabSlugTaken   = errors.New("lab slug already exists")
+	ErrTaskNotFound   = errors.New("task not found")
+	ErrReviewNotFound = errors.New("review not found")
 )
 
 // InvalidInput names the field a form should highlight. Kept as a type rather

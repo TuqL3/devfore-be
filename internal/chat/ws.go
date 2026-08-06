@@ -3,9 +3,11 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -32,8 +34,15 @@ const (
 	refillTick = 2 * time.Second
 )
 
+// What a client may ask for over the socket. One shape with a kind rather than
+// three endpoints: editing and deleting have to reach the same audience the
+// message did, and that audience is only known here.
 type incoming struct {
-	Body string `json:"body"`
+	Kind string `json:"kind"` // "send" | "edit" | "delete"
+	// Recipient of a direct message. Absent or zero means the shared room.
+	PeerID int64  `json:"peer_id"`
+	ID     int64  `json:"id"` // edit/delete target
+	Body   string `json:"body"`
 }
 
 // Handle upgrades one connection and runs it until the client goes away, the
@@ -66,7 +75,7 @@ func (m *Module) Handle(c *gin.Context) {
 		context.WithoutCancel(c.Request.Context()), m.sessionWindow)
 	defer cancel()
 
-	feed, leave := m.hub.Join()
+	feed, leave := m.hub.Join(userID)
 	defer leave()
 
 	go m.writeLoop(ctx, ws, feed)
@@ -102,10 +111,7 @@ func (m *Module) readLoop(ctx context.Context, ws *websocket.Conn, userID int64,
 		if err := json.Unmarshal(raw, &in); err != nil {
 			continue
 		}
-		body, ok := Clean(in.Body)
-		if !ok {
-			continue
-		}
+
 		now := time.Now()
 		tokens = min(burst, tokens+now.Sub(last).Seconds()/refillTick.Seconds())
 		last = now
@@ -117,22 +123,87 @@ func (m *Module) readLoop(ctx context.Context, ws *websocket.Conn, userID int64,
 		}
 		tokens--
 
-		msg := Message{UserID: &userID, Username: username, Body: body}
-		// Stored before it is sent. The database assigns the id and the
-		// timestamp, so every client orders the room the same way — and a
-		// message that failed to store is never shown to anyone, rather than
-		// appearing live and vanishing on the next reload.
-		if err := m.repo.Save(ctx, &msg); err != nil {
-			slog.Error("chat save", "user", userID, "err", err)
-			continue
+		switch in.Kind {
+		case "edit":
+			m.handleEdit(ctx, in, userID)
+		case "delete":
+			m.handleDelete(ctx, in, userID)
+		default:
+			m.handleSend(ctx, in, userID, username)
 		}
-		m.hub.Broadcast(msg)
 	}
+}
+
+func (m *Module) handleSend(ctx context.Context, in incoming, userID int64, username string) {
+	body, ok := Clean(in.Body)
+	if !ok {
+		return
+	}
+
+	msg := Message{UserID: &userID, Username: username, Body: body}
+	if in.PeerID != 0 {
+		// Checked rather than trusted: the peer id comes off the wire, and
+		// without this a hand-written frame could open a thread with a banned
+		// or deleted account — or with the sender themselves, which the schema
+		// refuses and would surface as a constraint error instead of a reason.
+		ok, err := m.repo.CanReceive(ctx, in.PeerID)
+		if err != nil {
+			slog.Error("chat peer check", "user", userID, "err", err)
+			return
+		}
+		if !ok || in.PeerID == userID {
+			return
+		}
+		peer := in.PeerID
+		msg.PeerID = &peer
+	}
+
+	// Stored before it is sent. The database assigns the id and the timestamp,
+	// so every client orders the thread the same way — and a message that
+	// failed to store is never shown to anyone, rather than appearing live and
+	// vanishing on the next reload.
+	if err := m.repo.Save(ctx, &msg); err != nil {
+		slog.Error("chat save", "user", userID, "err", err)
+		return
+	}
+	m.hub.Broadcast(Event{Kind: "message", Message: msg})
+}
+
+func (m *Module) handleEdit(ctx context.Context, in incoming, userID int64) {
+	body, ok := Clean(in.Body)
+	if !ok || in.ID == 0 {
+		return
+	}
+	msg, err := m.repo.Edit(ctx, in.ID, userID, body)
+	if err != nil {
+		// Not theirs, already deleted, or gone. None of the three is worth
+		// telling the sender apart — a client that edits what it did not write
+		// is not a client with a user behind it.
+		if !errors.Is(err, ErrNotAllowed) && !errors.Is(err, ErrNotFound) {
+			slog.Error("chat edit", "user", userID, "id", in.ID, "err", err)
+		}
+		return
+	}
+	m.hub.Broadcast(Event{Kind: "update", Message: *msg})
+}
+
+func (m *Module) handleDelete(ctx context.Context, in incoming, userID int64) {
+	if in.ID == 0 {
+		return
+	}
+	msg, err := m.repo.Delete(ctx, in.ID, userID)
+	if err != nil {
+		if !errors.Is(err, ErrNotAllowed) && !errors.Is(err, ErrNotFound) {
+			slog.Error("chat delete", "user", userID, "id", in.ID, "err", err)
+		}
+		return
+	}
+	m.hub.Broadcast(Event{Kind: "update", Message: *msg})
 }
 
 // writeLoop owns the write side: broadcasts, pings, and the close when the
 // authorised window runs out.
-func (m *Module) writeLoop(ctx context.Context, ws *websocket.Conn, feed <-chan Message) {
+func (m *Module) writeLoop(ctx context.Context, ws *websocket.Conn, feed <-chan Event) {
 	ping := time.NewTicker(pingEvery)
 	defer ping.Stop()
 
@@ -148,12 +219,12 @@ func (m *Module) writeLoop(ctx context.Context, ws *websocket.Conn, feed <-chan 
 			_ = ws.Close()
 			return
 
-		case msg, ok := <-feed:
+		case e, ok := <-feed:
 			if !ok {
 				return
 			}
 			_ = ws.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := ws.WriteJSON(msg); err != nil {
+			if err := ws.WriteJSON(e); err != nil {
 				_ = ws.Close()
 				return
 			}
@@ -168,17 +239,68 @@ func (m *Module) writeLoop(ctx context.Context, ws *websocket.Conn, feed <-chan 
 	}
 }
 
-// History is what a joining client reads before the socket opens. A plain GET
-// rather than a first websocket frame: it is cacheable, it works when the
-// upgrade fails, and it keeps the socket protocol to one message shape.
-func (m *Module) History(c *gin.Context) {
-	msgs, err := m.repo.Recent(c.Request.Context())
+// Messages is the tail a client reads before the socket opens: the shared room
+// by default, or one thread when ?peer= names somebody. A plain GET rather than
+// a first websocket frame — it is cacheable, it works when the upgrade fails,
+// and it keeps the socket protocol to one shape.
+func (m *Module) Messages(c *gin.Context) {
+	me := m.userID(c)
+
+	// Reading further back. Garbage is the newest page rather than a 400: the
+	// cursor is a scroll position, and refusing one leaves the screen stuck.
+	before, _ := strconv.ParseInt(c.Query("before"), 10, 64)
+	if before < 0 {
+		before = 0
+	}
+
+	var (
+		msgs []Message
+		err  error
+	)
+	if raw := c.Query("peer"); raw != "" {
+		peer, convErr := strconv.ParseInt(raw, 10, 64)
+		if convErr != nil || peer <= 0 || peer == me {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "peer không hợp lệ"})
+			return
+		}
+		// Scoped to the caller's own pair. There is no id a client can send
+		// that reads somebody else's thread, because the caller is always one
+		// half of the key.
+		msgs, err = m.repo.Thread(c.Request.Context(), me, peer, before)
+	} else {
+		msgs, err = m.repo.Room(c.Request.Context(), before)
+	}
 	if err != nil {
 		slog.Error("chat history", "err", err)
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "lỗi máy chủ"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"messages": msgs, "online": m.hub.Count()})
+}
+
+// Conversations is the sidebar: every direct thread the caller has, newest
+// first. The shared room is not in it — it always exists, and a row saying so
+// would be a row that can go missing.
+func (m *Module) Conversations(c *gin.Context) {
+	out, err := m.repo.Conversations(c.Request.Context(), m.userID(c))
+	if err != nil {
+		slog.Error("chat conversations", "err", err)
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "lỗi máy chủ"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"conversations": out})
+}
+
+// People backs "message someone". Signed-in only, active accounts only, and
+// never the caller.
+func (m *Module) People(c *gin.Context) {
+	out, err := m.repo.People(c.Request.Context(), m.userID(c), c.Query("q"))
+	if err != nil {
+		slog.Error("chat people", "err", err)
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "lỗi máy chủ"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"people": out})
 }
 
 func originAllowed(allowed []string) func(*http.Request) bool {

@@ -94,3 +94,10 @@ func (c *Courses) Leaderboard(ctx context.Context, slug string) ([]domain.Leader
 	}
 	return c.repo.Leaderboard(ctx, course.ID)
 }
+
+// MyCourses is the shelf on a student's profile: what they signed up for and how
+// far they got. No filtering or paging — a student enrols in a handful of
+// courses, and a page control over five rows is a control nobody uses.
+func (c *Courses) MyCourses(ctx context.Context, userID int64) ([]domain.Enrollment, error) {
+	return c.repo.Enrolled(ctx, userID)
+}

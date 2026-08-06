@@ -1,0 +1,4 @@
+# Mốc để so: một job làm hết, 630 giây. Ba bài sau đo xuống từ con số này.
+jobs:
+  ci:
+    steps: [checkout, npm-ci, lint, unit, integration, build, package]

@@ -31,10 +31,13 @@ func (r *GradeRepo) Task(ctx context.Context, taskID int64) (*domain.Task, error
 		CorrectOptions   []byte
 		OptionCount      int
 		ExpectedCommands string
+		// Left undecoded here: only a sim task has anything in it, and the shape
+		// it decodes to belongs to the grader rather than to this row.
+		SimGoal []byte
 	}
 	res := r.db.WithContext(ctx).Raw(
 		`SELECT t.id, t.lab_id, l.course_id, t.points, t.kind, t.check_script,
-		        t.expected_commands,
+		        t.expected_commands, t.sim_goal,
 		        COALESCE((
 		          SELECT jsonb_agg(o.idx - 1 ORDER BY o.idx)
 		            FROM jsonb_array_elements(t.options) WITH ORDINALITY AS o(val, idx)
@@ -53,15 +56,16 @@ func (r *GradeRepo) Task(ctx context.Context, taskID int64) (*domain.Task, error
 	}
 
 	t := domain.Task{
-		ID:             row.ID,
-		LabID:          row.LabID,
-		CourseID:       row.CourseID,
-		Points:         row.Points,
-		Kind:           row.Kind,
-		CheckScript:    row.CheckScript,
+		ID:               row.ID,
+		LabID:            row.LabID,
+		CourseID:         row.CourseID,
+		Points:           row.Points,
+		Kind:             row.Kind,
+		CheckScript:      row.CheckScript,
 		CorrectOptions:   []int{},
 		OptionCount:      row.OptionCount,
 		ExpectedCommands: row.ExpectedCommands,
+		SimGoal:          row.SimGoal,
 	}
 	if len(row.CorrectOptions) > 0 {
 		if err := json.Unmarshal(row.CorrectOptions, &t.CorrectOptions); err != nil {

@@ -142,3 +142,15 @@ func (h *Handler) Status(c *gin.Context) {
 		"updated_at":    course.UpdatedAt,
 	})
 }
+
+// MyCourses is the shelf on a student's own profile. Scoped to the caller by the
+// session rather than by a path parameter: there is no id anybody can send that
+// reads somebody else's enrolments.
+func (h *Handler) MyCourses(c *gin.Context) {
+	items, err := h.uc.MyCourses(c.Request.Context(), userID(c))
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, newEnrollmentList(items))
+}

@@ -81,6 +81,61 @@ func TestLabDetailNeverSerialisesCorrectAnswers(t *testing.T) {
 	}
 }
 
+// lab_tasks.sim_goal states the schedule a student is being asked to produce —
+// "these two jobs run at once, under six minutes, with this cache warm". It is
+// the answer key of a sim task the same way check_script is one for a script
+// task, and it travels through the admin response only.
+//
+// The scenario is the opposite and has to reach the student: without the
+// catalogue of steps there is nothing to write a pipeline out of. Both halves
+// are pinned here, because the failure that matters is somebody adding a goal
+// field to make the editor easier and nobody noticing.
+func TestLabDetailCarriesTheScenarioButNeverTheGoal(t *testing.T) {
+	lab := &domain.Lab{
+		ID: 11, Slug: "pipeline-dau-tien", Title: "Pipeline đầu tiên",
+		SimScenario: []byte(`{"version":1,"runner_count":2,` +
+			`"catalog":{"checkout":{"seconds":5},"npm-ci":{"seconds":90}}}`),
+		Tasks: []domain.Task{{
+			ID: 1, Title: "Cho test chạy song song với build", Points: 10,
+			Kind: domain.KindSim,
+		}},
+	}
+
+	b, err := json.Marshal(newLabDetail(lab))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(b)
+
+	for _, leak := range []string{"sim_goal", "simGoal", "SimGoal", "jobs_parallel"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("response carries %q:\n%s", leak, body)
+		}
+	}
+
+	// Nested JSON, not a quoted string: the client reads the catalogue, and a
+	// string of JSON would make it parse a field the server already parsed.
+	if !strings.Contains(body, `"sim_scenario":{"version":1`) {
+		t.Errorf("scenario should reach the student as JSON, got: %s", body)
+	}
+	if !strings.Contains(body, `"kind":"sim"`) {
+		t.Errorf("kind should reach the student, got: %s", body)
+	}
+}
+
+// A container lab has no scenario, and the field has to marshal as null rather
+// than blowing up: an empty json.RawMessage is not valid JSON, and the whole
+// response would fail over a column that is simply unset.
+func TestLabDetailWithNoScenarioMarshalsNull(t *testing.T) {
+	b, err := json.Marshal(newLabDetail(&domain.Lab{Slug: "lab-container"}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"sim_scenario":null`) {
+		t.Errorf(`want "sim_scenario":null, got: %s`, b)
+	}
+}
+
 // An empty task list has to marshal as [] and not null: the frontend maps over
 // it, and null is a runtime error there rather than an empty render.
 func TestLabDetailWithNoTasksMarshalsEmptyArray(t *testing.T) {

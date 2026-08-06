@@ -1,0 +1,7 @@
+# Không job nào chờ ai, hai runner nhận cả hai từ giây 0: build 0→155,
+# test 0→215. Tổng 215 thay vì 370.
+jobs:
+  build:
+    steps: [checkout, npm-ci, npm-build]
+  test:
+    steps: [checkout, npm-ci, npm-test]

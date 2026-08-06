@@ -38,4 +38,8 @@ type Spec struct {
 	LabTitle   string
 	CourseSlug string
 	Image      string
+	// The authored scenario, raw from the jsonb column, empty for a lab that runs
+	// in a container. Its presence is the whole of what makes a lab a sim lab:
+	// there is no second flag that could disagree with it.
+	SimScenario []byte
 }

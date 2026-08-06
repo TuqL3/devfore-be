@@ -1,0 +1,7 @@
+# e2e đứng một nhánh riêng, không ai chờ nó. Bài chấm theo chỗ hai job chồng thời
+# gian nên e2e đỏ hay xanh đều đạt — đó chính là nghĩa của "cách ly".
+jobs:
+  unit:
+    steps: [checkout, npm-ci, unit]
+  e2e:
+    steps: [checkout, npm-ci, e2e]

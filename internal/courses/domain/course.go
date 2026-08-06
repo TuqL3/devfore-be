@@ -56,9 +56,23 @@ type Lab struct {
 	TaskCount       int
 	Points          int
 	// Which container image the lab starts. Null until an author picks one, and
-	// a lab without it cannot be started at all — the session query joins images
-	// inner. Only the admin presenter exposes it.
+	// a lab without it cannot be started at all. Only the admin presenter
+	// exposes it.
 	LabImageID *int64
+	// The pipeline scenario for a sim lab, raw jsonb. Empty on a container lab,
+	// and a lab is one or the other — the database refuses both at once.
+	//
+	// Carried as bytes rather than as a parsed type because the engine that gives
+	// it meaning lives in the labs module, and these two modules deliberately do
+	// not import each other. It reaches the student as well as the author: the
+	// catalogue of steps and the runner count are what a pipeline is written
+	// against, not an answer key.
+	SimScenario []byte
+	// Whether this lab simulates instead of running a container, computed in SQL
+	// from the column above. It exists because the course listing needs the
+	// answer without carrying every scenario on it: the screen before Start has
+	// to stop promising a container that a sim lab never creates.
+	IsSim bool
 	// Filled by a second query, never by a scan. Without the tag gorm reads the
 	// slice as a relation and fails every query that scans a Lab, including the
 	// course detail one that does not want tasks at all.
@@ -73,6 +87,9 @@ const (
 	// Graded from the shell history: the question asks the student to run a
 	// command that changes nothing, so nothing else records that they did.
 	KindCommand = "command"
+	// Graded against the pipeline the student simulated. The lab it belongs to
+	// has to carry a scenario, or there is nothing to write a pipeline against.
+	KindSim = "sim"
 )
 
 // Task deliberately has no CheckScript field. The column holds the commands that
@@ -114,6 +131,10 @@ type AdminTask struct {
 	// Accepted commands, one per line. The answer key for a command task, so it
 	// never reaches the student-facing Task.
 	ExpectedCommands string
+	// The pass condition of a sim task, raw jsonb. This is the answer key for its
+	// kind — it names the schedule the student is being asked to produce — so it
+	// belongs here beside CheckScript and never on Task.
+	SimGoal []byte
 }
 
 // LabImage is the pinned container image an author picks for a lab.
@@ -132,6 +153,10 @@ type LabInput struct {
 	DurationMinutes int
 	LabImageID      *int64
 	OrderIdx        int
+	// Empty means a container lab. Stored as NULL when empty rather than as an
+	// empty object, because NULL is what every other query reads to tell the two
+	// kinds of lab apart.
+	SimScenario []byte
 }
 
 type TaskInput struct {
@@ -141,12 +166,21 @@ type TaskInput struct {
 	CheckScript      string
 	Options          []Option
 	ExpectedCommands string
+	SimGoal          []byte
 	Points           int
 	OrderIdx         int
 }
 
 type Review struct {
 	ID        int64
+	Title     string
+	ContentMD string
+	OrderIdx  int
+}
+
+// ReviewInput is what an author submits for a revision note. Same shape minus
+// the id, which the database owns.
+type ReviewInput struct {
 	Title     string
 	ContentMD string
 	OrderIdx  int
@@ -159,4 +193,15 @@ type LeaderRow struct {
 	LabsCompleted int
 	Attempts      int
 	UpdatedAt     time.Time
+}
+
+// Enrollment is one row of "my courses": the course, plus how far this student
+// has got in it. The progress numbers come from course_scores, which the grading
+// path already maintains — recomputing them here would be a second answer to the
+// same question, free to disagree with the leaderboard.
+type Enrollment struct {
+	Course        Course
+	Score         int
+	LabsCompleted int
+	EnrolledAt    time.Time
 }

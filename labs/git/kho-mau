@@ -1,0 +1,31 @@
+#!/bin/sh
+# Dựng lại kho mẫu ~/duan: 3 commit trên nhánh main.
+#
+# Mỗi lab chạy trong một container mới, nên kho của lab trước không còn. Bài đầu
+# của mỗi lab Git là chạy lệnh này — trừ lab 1, nơi việc tự tay dựng kho chính là
+# nội dung cần học.
+set -e
+
+d="$HOME/duan"
+rm -rf "$d"
+mkdir -p "$d"
+cd "$d"
+
+# Đặt ở --global để mọi kho tạo sau (kể cả kho clone ra) đều commit được ngay.
+git config --global user.name "Hoc Vien"
+git config --global user.email "hocvien@devforge.local"
+
+git init -q
+printf '# Du an mau\n' > README.md
+git add README.md
+git commit -qm "commit dau tien"
+
+printf 'alpha\n' > alpha.txt
+git add alpha.txt
+git commit -qm "them alpha"
+
+printf 'beta\n' > beta.txt
+git add beta.txt
+git commit -qm "them beta"
+
+echo "Đã dựng $d — 3 commit, nhánh main. Chạy: git -C $d log --oneline"

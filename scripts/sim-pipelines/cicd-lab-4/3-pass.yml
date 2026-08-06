@@ -1,0 +1,8 @@
+# Hai nhánh cộng cache: từ lượt thứ hai npm-ci còn 10 giây, tổng 310.
+jobs:
+  test:
+    steps: [checkout, npm-ci, lint, unit, integration]
+    cache: [node_modules]
+  ship:
+    steps: [checkout, npm-ci, build, package]
+    cache: [node_modules]

@@ -1,7 +1,9 @@
 package usecase
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/devforge/be/internal/courses/domain"
@@ -17,7 +19,34 @@ const (
 	maxOptionText    = 500
 	maxCommands      = 10
 	maxCommandLen    = 200
+	// A scenario is a catalogue of steps with a few numbers each; a goal is a
+	// handful of clauses. Both are pasted as JSON, so the ceiling is against a
+	// paste that went wrong rather than against a lab anybody would write.
+	maxSimScenario = 20000
+	maxSimGoal     = 4000
 )
+
+// cleanJSON bounds a pasted JSON object and refuses anything that is not one.
+// Only the shape is checked here: what a valid scenario or goal contains is the
+// simulator's business, and this module deliberately does not import it. An
+// author who pastes a well-formed object with the wrong keys finds out when they
+// run it, which is one screen away.
+func cleanJSON(raw []byte, field string, max int) ([]byte, error) {
+	trimmed := bytes.TrimSpace(raw)
+	// An empty box and `{}` are the same intent — nothing here — and both are
+	// stored as the column's own empty value by the repository.
+	if len(trimmed) == 0 {
+		return nil, nil
+	}
+	if len(trimmed) > max {
+		return nil, domain.InvalidInput{Field: field, Message: "nội dung JSON quá dài"}
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(trimmed, &obj); err != nil {
+		return nil, domain.InvalidInput{Field: field, Message: "JSON không hợp lệ"}
+	}
+	return trimmed, nil
+}
 
 func (c *Courses) AdminLabs(ctx context.Context, courseID int64) ([]domain.Lab, error) {
 	// Reading the course first is what turns a bad id into a 404 rather than an
@@ -115,6 +144,23 @@ func (c *Courses) cleanLab(ctx context.Context, in domain.LabInput) (domain.LabI
 		return in, domain.InvalidInput{Field: "order_idx", Message: "thứ tự không được âm"}
 	}
 
+	scenario, err := cleanJSON(in.SimScenario, "sim_scenario", maxSimScenario)
+	if err != nil {
+		return in, err
+	}
+	in.SimScenario = scenario
+
+	// A lab runs in a container or it simulates a pipeline, never both. The
+	// database says the same thing, but a constraint violation surfaces as a
+	// server error — an author picking an image on a sim lab has made an ordinary
+	// mistake and deserves to be told which field it is in.
+	if in.LabImageID != nil && len(in.SimScenario) > 0 {
+		return in, domain.InvalidInput{
+			Field:   "sim_scenario",
+			Message: "một lab chỉ có thể là lab container hoặc lab mô phỏng, không thể cả hai",
+		}
+	}
+
 	// A lab with no image cannot be started, but saving one is how a draft gets
 	// written before the image exists. A wrong id is the error worth refusing.
 	if in.LabImageID != nil {
@@ -154,9 +200,33 @@ func cleanTask(in domain.TaskInput) (domain.TaskInput, error) {
 	case in.OrderIdx < 0:
 		return in, domain.InvalidInput{Field: "order_idx", Message: "thứ tự không được âm"}
 	case in.Kind != domain.KindScript && in.Kind != domain.KindChoice &&
-		in.Kind != domain.KindCommand:
+		in.Kind != domain.KindCommand && in.Kind != domain.KindSim:
 		return in, domain.InvalidInput{Field: "kind", Message: "loại nhiệm vụ không hợp lệ"}
 	}
+
+	goal, err := cleanJSON(in.SimGoal, "sim_goal", maxSimGoal)
+	if err != nil {
+		return in, err
+	}
+	in.SimGoal = goal
+
+	if in.Kind == domain.KindSim {
+		// Graded from the run the student produced, so nothing that grades against
+		// a container means anything here.
+		in.Options = nil
+		in.CheckScript = ""
+		in.ExpectedCommands = ""
+		// An empty goal is allowed to be saved and refused at grading time. An
+		// author writes the scenario, the task and the goal in three passes, and
+		// blocking the save would mean holding the whole task hostage to the last
+		// of them.
+		return in, nil
+	}
+
+	// Every other kind is graded without a run, so a goal left over from a task
+	// that used to be a sim task is dead weight that would come back to life if
+	// it ever switched back.
+	in.SimGoal = nil
 
 	if in.Kind == domain.KindScript {
 		// Leftovers from a task that used to be another kind would sit in the row
@@ -234,5 +304,61 @@ func cleanTask(in domain.TaskInput) (domain.TaskInput, error) {
 		return in, domain.InvalidInput{Field: "options", Message: "không thể đánh dấu tất cả là đúng"}
 	}
 	in.Options = options
+	return in, nil
+}
+
+// maxReviewMD is the same ceiling a lab's instructions get: both are one screen
+// of markdown an author writes by hand.
+const maxReviewMD = maxDescriptionMD
+
+func (c *Courses) AdminReviews(ctx context.Context, courseID int64) ([]domain.Review, error) {
+	// Reading the course first turns a bad id into a 404 rather than an empty
+	// list, which reads as "this course has no notes yet".
+	if _, err := c.repo.ByID(ctx, courseID); err != nil {
+		return nil, err
+	}
+	return c.repo.Reviews(ctx, courseID)
+}
+
+func (c *Courses) CreateReview(ctx context.Context, courseID int64, in domain.ReviewInput) (*domain.Review, error) {
+	if _, err := c.repo.ByID(ctx, courseID); err != nil {
+		return nil, err
+	}
+	in, err := cleanReview(in)
+	if err != nil {
+		return nil, err
+	}
+	return c.repo.CreateReview(ctx, courseID, in)
+}
+
+func (c *Courses) UpdateReview(ctx context.Context, reviewID int64, in domain.ReviewInput) (*domain.Review, error) {
+	in, err := cleanReview(in)
+	if err != nil {
+		return nil, err
+	}
+	return c.repo.UpdateReview(ctx, reviewID, in)
+}
+
+func (c *Courses) DeleteReview(ctx context.Context, reviewID int64) error {
+	return c.repo.DeleteReview(ctx, reviewID)
+}
+
+// cleanReview trims and bounds. The body is markdown rendered on a page anyone
+// signed in can read, so the length is a real limit rather than a formality —
+// but the markup itself is left alone, because the reader renders it as text.
+func cleanReview(in domain.ReviewInput) (domain.ReviewInput, error) {
+	in.Title = strings.TrimSpace(in.Title)
+	in.ContentMD = strings.TrimSpace(in.ContentMD)
+
+	switch {
+	case in.Title == "":
+		return in, domain.InvalidInput{Field: "title", Message: "tiêu đề không được để trống"}
+	case len(in.Title) > maxTitle:
+		return in, domain.InvalidInput{Field: "title", Message: "tiêu đề quá dài"}
+	case len(in.ContentMD) > maxReviewMD:
+		return in, domain.InvalidInput{Field: "content_md", Message: "nội dung quá dài"}
+	case in.OrderIdx < 0:
+		return in, domain.InvalidInput{Field: "order_idx", Message: "thứ tự không được âm"}
+	}
 	return in, nil
 }

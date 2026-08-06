@@ -10,6 +10,10 @@ const (
 	KindScript  = "script"
 	KindChoice  = "choice"
 	KindCommand = "command"
+	// Graded against the student's most recent simulated pipeline run rather than
+	// against a container. The only kind whose evidence was produced by this
+	// server instead of read off a filesystem.
+	KindSim = "sim"
 )
 
 type Task struct {
@@ -26,6 +30,11 @@ type Task struct {
 	// Accepted commands for a command task, one per line, already whitespace
 	// normalised by the editor that saved them.
 	ExpectedCommands string
+	// The pass condition of a sim task, raw from the jsonb column. Carried
+	// undecoded because the shape it decodes to belongs to the grader, and a task
+	// of any other kind has `{}` here — a value worth moving around but not worth
+	// parsing on every check.
+	SimGoal []byte
 }
 
 // Grade is what a single press of the check button changed. PointsAwarded is

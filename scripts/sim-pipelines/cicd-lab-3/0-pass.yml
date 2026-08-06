@@ -1,0 +1,8 @@
+# migrate hỏng 100% số lượt, deploy chờ nó nên không bao giờ được thử:
+# migrate failed, deploy skipped, runner của deploy là -1.
+jobs:
+  migrate:
+    steps: [checkout, migrate]
+  deploy:
+    needs: [migrate]
+    steps: [deploy]

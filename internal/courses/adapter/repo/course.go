@@ -72,10 +72,16 @@ func (r *CourseRepo) ListPublished(ctx context.Context, f domain.CourseFilter) (
 	}
 
 	var rows []courseRow
+	// Easiest first, newest first within a level. Sorting by date alone put
+	// whatever was published last at the top, so a beginner landed on the
+	// hardest course on the site — the list is a path through the material, not
+	// a feed. LEFT JOIN so a course whose level is not in the table still shows,
+	// after the ones that are.
 	err := r.db.WithContext(ctx).Raw(
 		`SELECT `+courseCols+` FROM courses c
+		 LEFT JOIN levels lv ON lv.slug = c.level
 		 WHERE `+strings.Join(where, " AND ")+`
-		 ORDER BY c.published_at DESC NULLS LAST, c.id DESC`,
+		 ORDER BY lv.rank NULLS LAST, c.published_at DESC NULLS LAST, c.id DESC`,
 		args...,
 	).Scan(&rows).Error
 	if err != nil {
@@ -131,7 +137,11 @@ func (r *CourseRepo) BySlug(ctx context.Context, slug string) (*domain.Course, e
 func (r *CourseRepo) LabsByCourse(ctx context.Context, courseID int64) ([]domain.Lab, error) {
 	var labs []domain.Lab
 	err := r.db.WithContext(ctx).Raw(
+		// The scenario itself is not on the listing — only whether there is one.
+		// A course page showing ten labs has no use for ten catalogues, and the
+		// one screen that needs the answer only needs the bit.
 		`SELECT l.id, l.slug, l.title, l.description_md, l.duration_minutes, l.order_idx,
+			(l.sim_scenario IS NOT NULL)                                          AS is_sim,
 			(SELECT count(*) FROM lab_tasks t WHERE t.lab_id = l.id)               AS task_count,
 			COALESCE((SELECT sum(points) FROM lab_tasks t WHERE t.lab_id = l.id), 0) AS points
 		 FROM labs l WHERE l.course_id = ? ORDER BY l.order_idx, l.id`, courseID,
@@ -141,10 +151,17 @@ func (r *CourseRepo) LabsByCourse(ctx context.Context, courseID int64) ([]domain
 
 // Lab slugs are unique across the whole table, but the lookup is still scoped to
 // the course so a lab cannot be reached through the wrong course's URL.
+//
+// sim_scenario is the one authored field here that reaches the student, and only
+// on this query rather than on the course listing beside it: a pipeline is
+// written against the catalogue of steps and the runner count, so withholding
+// them would leave the editor with nothing to offer. lab_image_id stays out —
+// which image a lab runs is an authoring detail.
 func (r *CourseRepo) LabBySlug(ctx context.Context, courseID int64, slug string) (*domain.Lab, error) {
 	var lab domain.Lab
 	res := r.db.WithContext(ctx).Raw(
 		`SELECT l.id, l.slug, l.title, l.description_md, l.duration_minutes, l.order_idx,
+			l.sim_scenario, (l.sim_scenario IS NOT NULL) AS is_sim,
 			(SELECT count(*) FROM lab_tasks t WHERE t.lab_id = l.id)                 AS task_count,
 			COALESCE((SELECT sum(points) FROM lab_tasks t WHERE t.lab_id = l.id), 0) AS points
 		 FROM labs l WHERE l.course_id = ? AND l.slug = ?`, courseID, slug,
@@ -254,4 +271,70 @@ func (r *CourseRepo) Leaderboard(ctx context.Context, courseID int64) ([]domain.
 		 LIMIT 50`, courseID,
 	).Scan(&rows).Error
 	return rows, err
+}
+
+// Enrolled lists the courses this student signed up for, most recently enrolled
+// first, each with how far they have got. Drafts are kept in: unpublishing a
+// course an admin is reworking should not make it vanish from the shelf of
+// somebody who already started it.
+func (r *CourseRepo) Enrolled(ctx context.Context, userID int64) ([]domain.Enrollment, error) {
+	// Spelled out rather than embedding courseRow: gorm's Scan maps columns onto
+	// named fields only, so an anonymous embed reads back as a zero course while
+	// the fields beside it fill in perfectly — a result that looks like data.
+	var rows []struct {
+		ID            int64
+		Slug          string
+		Title         string
+		Description   string
+		ImageURL      *string
+		Level         string
+		Status        string
+		PublishedAt   *time.Time
+		UpdatedAt     time.Time
+		LabCount      int
+		StudentCount  int64
+		Score         int
+		LabsCompleted int
+		EnrolledAt    time.Time
+	}
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT `+courseCols+`,
+		        COALESCE(cs.score, 0)          AS score,
+		        COALESCE(cs.labs_completed, 0) AS labs_completed,
+		        e.created_at                   AS enrolled_at
+		   FROM enrollments e
+		   JOIN courses c ON c.id = e.course_id
+		   LEFT JOIN course_scores cs ON cs.course_id = c.id AND cs.user_id = e.user_id
+		  WHERE e.user_id = ?
+		  ORDER BY e.created_at DESC, c.id DESC`, userID,
+	).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.Enrollment, len(rows))
+	for i, row := range rows {
+		course := courseRow{
+			ID:           row.ID,
+			Slug:         row.Slug,
+			Title:        row.Title,
+			Description:  row.Description,
+			ImageURL:     row.ImageURL,
+			Level:        row.Level,
+			Status:       row.Status,
+			PublishedAt:  row.PublishedAt,
+			UpdatedAt:    row.UpdatedAt,
+			LabCount:     row.LabCount,
+			StudentCount: row.StudentCount,
+		}.toDomain()
+		// Every course in this list is one they are enrolled in, by definition of
+		// the query — saying so saves the caller a second lookup to find out.
+		course.Enrolled = true
+		out[i] = domain.Enrollment{
+			Course:        course,
+			Score:         row.Score,
+			LabsCompleted: row.LabsCompleted,
+			EnrolledAt:    row.EnrolledAt,
+		}
+	}
+	return out, nil
 }

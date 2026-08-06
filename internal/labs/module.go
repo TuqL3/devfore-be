@@ -5,32 +5,54 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
 	"github.com/devforge/be/internal/audit"
 	"github.com/devforge/be/internal/labs/adapter/dockerx"
+	"github.com/devforge/be/internal/labs/adapter/openrouter"
+	"github.com/devforge/be/internal/labs/adapter/quota"
 	"github.com/devforge/be/internal/labs/adapter/repo"
 	"github.com/devforge/be/internal/labs/adapter/rest"
 	"github.com/devforge/be/internal/labs/usecase"
+	"github.com/devforge/be/internal/labs/usecase/simgen"
 )
 
 type Config struct {
 	DockerHost     string
 	SessionTTL     time.Duration
 	AllowedOrigins []string
+	// Either empty switches off scenario generation. The server still starts and
+	// the endpoint answers 503: one optional feature must not be a boot
+	// requirement.
+	OpenRouterKey   string
+	OpenRouterModel string
+	// Sent to OpenRouter for traffic attribution. Not auth, not required.
+	PublicURL string
+	// Generations allowed per user per day. Every one of them is a paid call, so
+	// this is a cost ceiling, not a fairness knob.
+	AIDailyLimit int
 }
 
 type Module struct {
 	handler  *rest.Handler
 	terminal *rest.Terminal
-	uc       *usecase.Labs
-	runtime  *dockerx.Runtime
+	// The simulator offered as a tool rather than as a lesson. It lives in this
+	// module because it runs the same engine, and nowhere near the rest of it
+	// because it touches no session, no container and no mark.
+	playground *rest.Playground
+	// Writing a scenario from a sentence. Sits here rather than in its own
+	// module because what makes it safe is this module's engine: everything the
+	// model produces is checked and run by `sim` before it leaves the server.
+	simgen  *rest.Simgen
+	uc      *usecase.Labs
+	runtime *dockerx.Runtime
 }
 
 // New fails rather than degrades when the socket proxy is unreachable. A server
 // that boots without a runtime looks healthy right up until the first student
 // presses Start.
-func New(ctx context.Context, db *gorm.DB, cfg Config) (*Module, error) {
+func New(ctx context.Context, db *gorm.DB, rdb *redis.Client, cfg Config) (*Module, error) {
 	rt, err := dockerx.New(cfg.DockerHost)
 	if err != nil {
 		return nil, err
@@ -39,12 +61,20 @@ func New(ctx context.Context, db *gorm.DB, cfg Config) (*Module, error) {
 		return nil, err
 	}
 
-	uc := usecase.NewLabs(repo.NewSessionRepo(db), repo.NewGradeRepo(db), rt, cfg.SessionTTL)
+	uc := usecase.NewLabs(
+		repo.NewSessionRepo(db), repo.NewGradeRepo(db), repo.NewSimRepo(db),
+		rt, cfg.SessionTTL,
+	)
 	return &Module{
-		handler:  rest.NewHandler(uc),
-		terminal: rest.NewTerminal(uc, cfg.AllowedOrigins),
-		uc:       uc,
-		runtime:  rt,
+		handler:    rest.NewHandler(uc),
+		terminal:   rest.NewTerminal(uc, cfg.AllowedOrigins),
+		playground: rest.NewPlayground(usecase.NewPlayground()),
+		simgen: rest.NewSimgen(simgen.New(
+			openrouter.New(cfg.OpenRouterKey, cfg.OpenRouterModel, cfg.PublicURL),
+			quota.New(rdb, cfg.AIDailyLimit),
+		)),
+		uc:      uc,
+		runtime: rt,
 	}, nil
 }
 
@@ -91,6 +121,22 @@ func (m *Module) Routes(r *gin.Engine, api *gin.RouterGroup, required, admin gin
 	// Grading is scoped to a session because a check script only means anything
 	// against the container that session owns.
 	api.POST("/lab-sessions/:id/tasks/:taskID/check", required, h.Check)
+
+	// A sim lab runs its pipeline through the same session that would otherwise
+	// hold a container, so checking and submitting stay on the routes above. Only
+	// pressing Run is new, and reading back what was run.
+	api.POST("/lab-sessions/:id/sim/run", required, h.SimRun)
+	api.GET("/lab-sessions/:id/sim/runs", required, h.SimRuns)
+
+	// The playground: the simulator with no lab, no session, no mark — and no
+	// database, because its scenarios live in the frontend's own source. Signed
+	// in, but nothing beyond that: no enrolment, no container, nothing stored.
+	api.POST("/sim/preview", required, m.playground.Preview)
+
+	// Describing a pipeline in a sentence and getting a scenario back. Same
+	// place in the tree as Preview because it is the same tool: it produces
+	// something the playground runs, and nothing a lab is graded on.
+	api.POST("/sim/generate", required, m.simgen.Generate)
 
 	// Outside /api because it is not one: the client opens it with a WebSocket
 	// handshake, and the cookie the middleware reads rides along with it.

@@ -1,0 +1,10 @@
+# Cấu trúc đã đúng — ba job, ship chỉ needs build — nhưng không khai cache, nên
+# npm-ci vẫn 90 giây ở cả hai nhánh: build 0→155, ship 155→335. 335 > 260.
+jobs:
+  build:
+    steps: [checkout, npm-ci, npm-build]
+  test:
+    steps: [checkout, npm-ci, npm-test]
+  ship:
+    needs: [build]
+    steps: [docker-build]

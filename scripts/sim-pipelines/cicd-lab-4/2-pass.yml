@@ -1,0 +1,6 @@
+# Đúng hai nhánh cho đúng hai runner: 390 giây, không cần cache.
+jobs:
+  test:
+    steps: [checkout, npm-ci, lint, unit, integration]
+  ship:
+    steps: [checkout, npm-ci, build, package]

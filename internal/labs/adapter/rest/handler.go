@@ -84,6 +84,8 @@ func (h *Handler) Start(c *gin.Context) {
 		abort(c, http.StatusNotFound, "bài lab không tồn tại")
 	case errors.Is(err, domain.ErrAlreadyRunning):
 		abort(c, http.StatusConflict, "bạn đang có một phiên lab chạy dở, hãy đóng nó trước")
+	case errors.Is(err, domain.ErrNotEnrolled):
+		abort(c, http.StatusForbidden, "bạn cần đăng ký khoá học này trước khi làm lab")
 	case err != nil:
 		serverError(c, err)
 	default:
@@ -174,6 +176,13 @@ func (h *Handler) Check(c *gin.Context) {
 		abort(c, http.StatusNotFound, "nhiệm vụ không tồn tại")
 	case errors.Is(err, domain.ErrCheckTimeout):
 		abort(c, http.StatusGatewayTimeout, "bài kiểm tra chạy quá lâu, thử lại")
+	case errors.Is(err, domain.ErrNoSimRun):
+		abort(c, http.StatusConflict, "hãy chạy pipeline một lượt trước khi nộp")
+	case errors.Is(err, domain.ErrEmptyGoal):
+		// An author saved a sim task with no pass condition. Refused rather than
+		// passed, and said out loud: silently marking it correct is the failure
+		// nobody would report.
+		abort(c, http.StatusConflict, "nhiệm vụ này chưa có điều kiện chấm")
 	case err != nil:
 		serverError(c, err)
 	default:

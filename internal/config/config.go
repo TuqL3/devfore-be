@@ -58,6 +58,21 @@ type Config struct {
 	// How long a lab container may live. The reaper reads the deadline this
 	// produces out of the database, not out of a timer.
 	LabSessionTTL time.Duration `env:"LAB_SESSION_TTL" envDefault:"60m"`
+
+	// Leave either empty to switch off AI scenario generation: the server starts
+	// anyway and that one endpoint answers 503. Not required, because a
+	// deployment without a paid API account should still boot.
+	//
+	// The model is configuration rather than a constant so the provider can be
+	// changed without a deploy — and it has no default on purpose: a hard-coded
+	// slug that has been renamed upstream fails as a confusing 404 at the moment
+	// somebody first presses the button.
+	OpenRouterKey   string `env:"OPENROUTER_API_KEY"`
+	OpenRouterModel string `env:"OPENROUTER_MODEL"`
+	// Scenario generations allowed per user per calendar day (UTC). Every one is
+	// a billed call, so the default is deliberately small — raise it once you
+	// have watched what a day actually costs.
+	AIDailyLimit int `env:"AI_DAILY_LIMIT" envDefault:"10"`
 }
 
 func Load() (*Config, error) {

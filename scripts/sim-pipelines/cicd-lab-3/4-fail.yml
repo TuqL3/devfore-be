@@ -1,0 +1,8 @@
+# unit chờ e2e: bước hay hỏng nhất nằm chắn đường mọi thứ còn lại. Hai job nối
+# tiếp nên không có lúc nào chồng nhau.
+jobs:
+  e2e:
+    steps: [checkout, npm-ci, e2e]
+  unit:
+    needs: [e2e]
+    steps: [checkout, npm-ci, unit]

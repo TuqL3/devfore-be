@@ -19,25 +19,33 @@ type SessionRepo struct{ db *gorm.DB }
 
 func NewSessionRepo(db *gorm.DB) *SessionRepo { return &SessionRepo{db: db} }
 
-// SpecBySlug reads the lab together with the image it is pinned to. The join is
-// inner on purpose: a lab with no lab_images row has nothing to start, and
-// guessing a default would mean running students on an image nobody chose.
+// SpecBySlug reads the lab together with whichever runtime it is pinned to: an
+// image for a container lab, a scenario for a sim lab.
+//
+// The image join is left rather than inner because a sim lab has no lab_images
+// row at all — and `i.active` has to sit in the join condition, not in the WHERE
+// clause, or a null image fails the test and the left join collapses back into
+// an inner one. What the inner join used to enforce is enforced below instead: a
+// lab with neither runtime is still not found, because starting it would mean
+// guessing an image nobody chose.
 func (r *SessionRepo) SpecBySlug(ctx context.Context, labSlug string) (*domain.Spec, error) {
 	var row struct {
-		LabID      int64
-		LabSlug    string
-		LabTitle   string
-		CourseSlug string
-		Image      string
+		LabID       int64
+		LabSlug     string
+		LabTitle    string
+		CourseSlug  string
+		Image       string
+		SimScenario []byte
 	}
 	res := r.db.WithContext(ctx).Raw(
 		`SELECT l.id AS lab_id, l.slug AS lab_slug, l.title AS lab_title,
 		        c.slug AS course_slug,
-		        i.name || ':' || i.tag AS image
+		        COALESCE(i.name || ':' || i.tag, '') AS image,
+		        l.sim_scenario
 		   FROM labs l
-		   JOIN lab_images i ON i.id = l.lab_image_id
-		   JOIN courses c    ON c.id = l.course_id
-		  WHERE l.slug = ? AND i.active AND c.status = 'published'`, labSlug,
+		   LEFT JOIN lab_images i ON i.id = l.lab_image_id AND i.active
+		   JOIN courses c         ON c.id = l.course_id
+		  WHERE l.slug = ? AND c.status = 'published'`, labSlug,
 	).Scan(&row)
 	if res.Error != nil {
 		return nil, res.Error
@@ -45,12 +53,18 @@ func (r *SessionRepo) SpecBySlug(ctx context.Context, labSlug string) (*domain.S
 	if res.RowsAffected == 0 {
 		return nil, domain.ErrLabNotFound
 	}
+	if row.Image == "" && len(row.SimScenario) == 0 {
+		// No image, or an image that was deactivated, and no scenario either.
+		// Same answer the inner join gave before: there is nothing to start.
+		return nil, domain.ErrLabNotFound
+	}
 	return &domain.Spec{
-		LabID:      row.LabID,
-		LabSlug:    row.LabSlug,
-		LabTitle:   row.LabTitle,
-		CourseSlug: row.CourseSlug,
-		Image:      row.Image,
+		LabID:       row.LabID,
+		LabSlug:     row.LabSlug,
+		LabTitle:    row.LabTitle,
+		CourseSlug:  row.CourseSlug,
+		Image:       row.Image,
+		SimScenario: row.SimScenario,
 	}, nil
 }
 
@@ -137,4 +151,18 @@ func (r *SessionRepo) DueForReaping(ctx context.Context, limit int) ([]domain.Se
 		  LIMIT ?`, time.Now(), limit,
 	).Scan(&sessions).Error
 	return sessions, err
+}
+
+// IsEnrolled reports whether the student signed up for the course this lab
+// belongs to. Answered in one query from the lab's slug: the caller has the slug
+// and nothing else at the point the question needs asking, and looking the
+// course up separately would be a second round trip to learn the same thing.
+func (r *SessionRepo) IsEnrolled(ctx context.Context, userID int64, labSlug string) (bool, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT count(*) FROM enrollments e
+		   JOIN labs l ON l.course_id = e.course_id
+		  WHERE e.user_id = ? AND l.slug = ?`, userID, labSlug,
+	).Scan(&n).Error
+	return n > 0, err
 }

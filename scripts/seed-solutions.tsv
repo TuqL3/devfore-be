@@ -1,0 +1,81 @@
+# Lời giải cho mọi task kind='script' trong seed.sql — dữ liệu của scripts/check-seed.sh.
+# Ba cột, ngăn bằng TAB: lab_slug <TAB> order_idx <TAB> lệnh giải (một dòng, chạy bằng sh).
+# Tiền tố ! ở cột lệnh: bỏ qua khẳng định "phải trượt trước khi làm", dùng khi task
+# đã được lời giải của task trước đó thoả mãn sẵn.
+linux-lab-1	0	mkdir -p /home/student/devforge
+linux-lab-1	1	mkdir -p /home/student/devforge/bin /home/student/devforge/docs /home/student/devforge/tmp
+linux-lab-2	0	mkdir -p /home/student/devforge/docs && echo "xin chao devforge" > /home/student/devforge/docs/ghi-chu.txt
+linux-lab-2	1	echo "dong thu hai" >> /home/student/devforge/docs/ghi-chu.txt
+linux-lab-2	2	cp /home/student/devforge/docs/ghi-chu.txt /home/student/devforge/docs/ghi-chu.txt.bak
+linux-lab-2	3	mkdir -p /home/student/devforge/tmp && mv /home/student/devforge/docs/ghi-chu.txt.bak /home/student/devforge/tmp/ghi-chu-cu.txt
+linux-lab-3	0	mkdir -p /home/student/devforge/bin && printf '#!/bin/sh\necho "hello devforge"\n' > /home/student/devforge/bin/hello.sh
+linux-lab-3	1	chmod 755 /home/student/devforge/bin/hello.sh
+linux-lab-3	2	mkdir -p /home/student/devforge/docs && echo bi-mat > /home/student/devforge/docs/bi-mat.txt && chmod 600 /home/student/devforge/docs/bi-mat.txt
+linux-lab-4	0	grep root /etc/passwd > /home/student/ket-qua.txt
+linux-lab-4	1	wc -l < /etc/passwd > /home/student/so-dong.txt
+linux-lab-4	2	cut -d: -f1 /etc/passwd | sort > /home/student/users.txt
+linux-lab-4	3	cut -d: -f7 /etc/passwd | sort | uniq -c > /home/student/shells.txt
+linux-lab-5	0	mkdir -p /home/student/du-lieu && echo mot > /home/student/du-lieu/a.txt && echo hai > /home/student/du-lieu/b.txt
+linux-lab-5	1	printf '#!/bin/sh\nmkdir -p /home/student/backup\ncp -r /home/student/du-lieu/. /home/student/backup/\n' > /home/student/backup.sh && chmod 755 /home/student/backup.sh && /home/student/backup.sh
+linux-lab-5	2	sleep 300 & echo $! > /home/student/pid.txt
+git-lab-1	0	mkdir -p /home/student/duan && git -C /home/student/duan init -q
+git-lab-1	1	git -C /home/student/duan config user.name "Hoc Vien" && git -C /home/student/duan config user.email "hocvien@devforge.local"
+git-lab-1	2	printf '# Du an dau tien\n' > /home/student/duan/README.md && git -C /home/student/duan add README.md && git -C /home/student/duan commit -qm "commit dau tien"
+git-lab-2	0	kho-mau
+git-lab-2	1	printf 'alpha sua\n' > /home/student/duan/alpha.txt && git -C /home/student/duan commit -qam "sua alpha"
+git-lab-2	2	cd /home/student/duan && echo rac > rac.txt && git add rac.txt && git restore --staged rac.txt
+git-lab-2	3	git -C /home/student/duan revert --no-edit $(git -C /home/student/duan log --format=%H --grep="them beta")
+git-lab-3	0	kho-mau
+git-lab-3	1	cd /home/student/duan && git switch -qc tinh-nang && echo tinh-nang > tinh-nang.txt && git add tinh-nang.txt && git commit -qm "them tinh nang"
+git-lab-3	2	cd /home/student/duan && git switch -q main && git merge -q --no-edit tinh-nang
+git-lab-3	3	git -C /home/student/duan branch -q -d tinh-nang
+git-lab-4	0	kho-mau
+git-lab-4	1	git -C /home/student/duan commit -q --amend -m "them beta va gamma"
+git-lab-4	2	cd /home/student/duan && printf '*.log\n' > .gitignore && echo loi > test.log
+git-lab-4	3	cd /home/student/duan && git switch -qc thu-nghiem && echo delta > delta.txt && git add delta.txt && git commit -qm "them delta" && git switch -q main && git cherry-pick thu-nghiem >/dev/null
+git-lab-5	0	kho-mau
+git-lab-5	1	git init --bare -q /home/student/remote.git
+git-lab-5	2	cd /home/student/duan && git remote add origin /home/student/remote.git && git push -q origin main
+git-lab-5	3	git clone -q /home/student/remote.git /home/student/ban-sao
+git-lab-5	4	cd /home/student/ban-sao && echo gamma > gamma.txt && git add gamma.txt && git commit -qm "them gamma" && git push -q origin main && cd /home/student/duan && git pull -q origin main
+docker-lab-2	0	mkdir -p /home/student/app && echo 'echo chao' > /home/student/app/app.sh && printf 'FROM alpine\nWORKDIR /app\nCOPY app.sh .\nCMD ["sh", "app.sh"]\n' > /home/student/app/Dockerfile
+docker-lab-2	1	sed -i 's|^FROM alpine$|FROM alpine:3.21|' /home/student/app/Dockerfile
+docker-lab-2	2	sed -i 's|^WORKDIR /app$|WORKDIR /app\nRUN apk add --no-cache bash|' /home/student/app/Dockerfile
+docker-lab-3	0	mkdir -p /home/student/app && printf 'FROM golang:1.25 AS build\nWORKDIR /src\nCOPY . .\nRUN go build -o /app\n\nFROM alpine:3.21\nCOPY --from=build /app /app\nCMD ["/app"]\n' > /home/student/app/Dockerfile.multi
+docker-lab-3	1	mkdir -p /home/student/app && printf 'FROM golang:1.25\nWORKDIR /src\nCOPY go.mod go.sum ./\nRUN go mod download\nCOPY . .\nRUN go build -o /app\n' > /home/student/app/Dockerfile.cache
+docker-lab-3	2	mkdir -p /home/student/app && printf '.git\nnode_modules\n' > /home/student/app/.dockerignore
+docker-lab-4	2	printf 'docker run -d -p 8080:80 --name web nginx\n' > /home/student/lenh-chay.txt
+docker-lab-5	0	mkdir -p /home/student/app && printf 'services:\n  web:\n    build: .\n  db:\n    image: postgres:16-alpine\n' > /home/student/app/docker-compose.yml
+docker-lab-5	1	printf 'services:\n  web:\n    build: .\n    ports:\n      - "8080:80"\n    depends_on:\n      - db\n  db:\n    image: postgres:16-alpine\n' > /home/student/app/docker-compose.yml
+docker-lab-5	2	printf 'services:\n  web:\n    build: .\n    ports:\n      - "8080:80"\n    depends_on:\n      - db\n  db:\n    image: postgres:16-alpine\n    environment:\n      POSTGRES_PASSWORD: matkhau\n' > /home/student/app/docker-compose.yml
+net-lab-1	0	ip -o -4 addr show lo | awk '{print $4}' > /home/student/dia-chi.txt
+net-lab-1	1	ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 > /home/student/giao-dien.txt
+net-lab-2	0	(nc -l -p 8080 >/dev/null 2>&1 &) ; sleep 1
+net-lab-2	1	ss -ltn > /home/student/cong.txt
+net-lab-3	0	(nc -l -p 9000 > /home/student/nhan.txt 2>/dev/null &) ; sleep 1; echo "xin chao devforge" | nc 127.0.0.1 9000; sleep 1
+net-lab-3	1	echo "noi dung goi di" > /home/student/goi-di.txt; (nc -l -p 9001 > /home/student/nhan-file.txt 2>/dev/null &) ; sleep 1; nc 127.0.0.1 9001 < /home/student/goi-di.txt; sleep 1
+net-lab-4	0	mkdir -p /home/student/web && echo "<h1>chao devforge</h1>" > /home/student/web/index.html && httpd -p 8080 -h /home/student/web && sleep 1
+net-lab-4	1	curl -sI http://127.0.0.1:8080/ > /home/student/header.txt
+net-lab-4	2	curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/khong-co > /home/student/ma-loi.txt
+net-lab-5	0	printf '192.168.1.0\n192.168.1.63\n62\n' > /home/student/subnet.txt
+net-lab-5	1	echo 1022 > /home/student/so-host.txt
+linux-lab-6	0	ls /etc /khong-co > /home/student/log.txt 2>&1 || true
+linux-lab-6	1	ls /etc /khong-co > /dev/null 2> /home/student/loi.txt || true
+linux-lab-6	2	wc -l < /etc/passwd | tee /home/student/tee.txt > /dev/null
+linux-lab-6	3	false; echo $? > /home/student/ma-thoat.txt
+linux-lab-7	0	echo "noi dung goc" > /home/student/goc.txt && ln -s /home/student/goc.txt /home/student/lien-ket.txt
+linux-lab-7	1	ln /home/student/goc.txt /home/student/cung.txt
+linux-lab-7	2	mkdir -p /home/student/du-lieu && echo mot > /home/student/du-lieu/a.txt && echo hai > /home/student/du-lieu/b.txt
+linux-lab-7	3	cd /home/student && tar -czf sao-luu.tar.gz -C /home/student du-lieu && mkdir -p khoi-phuc && tar -xzf sao-luu.tar.gz -C khoi-phuc
+linux-lab-8	0	echo "$PATH" > /home/student/path.txt
+linux-lab-8	1	printf '#!/bin/sh\necho "$TEN"\n' > /home/student/in-ten.sh && TEN=devforge sh /home/student/in-ten.sh > /home/student/ket-qua.txt
+linux-lab-8	2	printf '#!/bin/sh\necho "$1"\n' > /home/student/chao-ten.sh && sh /home/student/chao-ten.sh "xin chao" > /home/student/tham-so.txt
+linux-lab-8	3	mkdir -p /home/student/bin && printf '#!/bin/sh\necho "chao devforge"\n' > /home/student/bin/chao && chmod 755 /home/student/bin/chao && PATH="/home/student/bin:$PATH" chao > /home/student/goi.txt
+net-lab-6	0	cat /sys/class/net/lo/address > /home/student/mac.txt
+net-lab-6	1	cat /sys/class/net/lo/mtu > /home/student/mtu.txt
+net-lab-7	0	grep -E "^127\.0\.0\.1[[:space:]]" /etc/hosts | awk '{print $1}' > /home/student/localhost-ip.txt
+net-lab-7	1	grep -cvE "^[[:space:]]*(#|$)" /etc/hosts > /home/student/so-ban-ghi.txt
+net-lab-7	2	getent hosts localhost > /home/student/getent.txt
+net-lab-8	0	mkdir -p /home/student/web && echo "<h1>chao devforge</h1>" > /home/student/web/index.html && httpd -p 8080 -h /home/student/web && sleep 1
+net-lab-8	1	printf 'GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' | nc 127.0.0.1 8080 > /home/student/tho.txt
+net-lab-8	2	printf 'GET /khong-co HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' | nc 127.0.0.1 8080 > /home/student/tho-404.txt

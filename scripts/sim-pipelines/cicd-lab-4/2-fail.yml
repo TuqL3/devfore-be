@@ -1,0 +1,10 @@
+# Ba nhánh trên hai runner: 485 giây, CHẬM HƠN hai nhánh (390). Nhánh thứ ba trả
+# thêm một lượt checkout + npm-ci mà không mua thêm được sự song song nào — nó
+# đứng đợi runner. Đây là bài học chính của lab, viết ra dưới dạng một lỗi.
+jobs:
+  lint:
+    steps: [checkout, npm-ci, lint]
+  test:
+    steps: [checkout, npm-ci, unit, integration]
+  ship:
+    steps: [checkout, npm-ci, build, package]
