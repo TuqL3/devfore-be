@@ -55,6 +55,9 @@ func (l *Labs) reapOnce(ctx context.Context) {
 
 func (l *Labs) reapOne(ctx context.Context, s domain.Session) {
 	if s.ContainerID != "" {
+		// Running out of time is the most likely way a drill ends, so the
+		// timeline has to survive this path as much as the other two.
+		l.captureCommandLog(ctx, &s)
 		if err := l.runtime.Remove(ctx, s.ContainerID); err != nil {
 			// Leave the row running so the next sweep tries again. Marking it
 			// expired here would lose the only pointer to a container that is

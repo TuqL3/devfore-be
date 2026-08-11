@@ -47,6 +47,29 @@ func (c *Courses) Detail(ctx context.Context, slug string, userID int64) (*domai
 
 // Lab resolves the course first so an unpublished course hides its labs: BySlug
 // only returns published rows, and everything here hangs off its id.
+// Drills lists the War Room's challenges. No enrolment, no course: a drill is a
+// thing you walk into, and the course row behind it exists only because a lab has
+// to belong to one.
+func (c *Courses) Drills(ctx context.Context) ([]domain.Lab, error) {
+	return c.repo.Drills(ctx)
+}
+
+// Drill is one challenge with its brief and its tasks. Same shape a lab page
+// gets, so the runner needs no second idea of what a lab looks like — and the
+// same repository call strips the answer key, rather than a second query that
+// could forget to.
+func (c *Courses) Drill(ctx context.Context, labSlug string) (*domain.Lab, error) {
+	lab, err := c.repo.DrillBySlug(ctx, labSlug)
+	if err != nil {
+		return nil, err
+	}
+	lab.Tasks, err = c.repo.TasksByLab(ctx, lab.ID)
+	if err != nil {
+		return nil, err
+	}
+	return lab, nil
+}
+
 func (c *Courses) Lab(ctx context.Context, courseSlug, labSlug string) (*domain.Lab, error) {
 	course, err := c.repo.BySlug(ctx, courseSlug)
 	if err != nil {

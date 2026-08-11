@@ -30,22 +30,34 @@ func NewSessionRepo(db *gorm.DB) *SessionRepo { return &SessionRepo{db: db} }
 // guessing an image nobody chose.
 func (r *SessionRepo) SpecBySlug(ctx context.Context, labSlug string) (*domain.Spec, error) {
 	var row struct {
-		LabID       int64
-		LabSlug     string
-		LabTitle    string
-		CourseSlug  string
-		Image       string
-		SimScenario []byte
+		LabID           int64
+		LabSlug         string
+		LabTitle        string
+		CourseSlug      string
+		Image           string
+		SimScenario     []byte
+		IncidentSetup   string
+		IsIncident      bool
+		DurationMinutes int
 	}
+	// A drill is exempt from the published check. It is not reached through a
+	// course at all — the course row it points at exists because labs.course_id is
+	// NOT NULL — so requiring that row to be published would make the War Room
+	// depend on a course nobody is meant to see.
 	res := r.db.WithContext(ctx).Raw(
 		`SELECT l.id AS lab_id, l.slug AS lab_slug, l.title AS lab_title,
 		        c.slug AS course_slug,
 		        COALESCE(i.name || ':' || i.tag, '') AS image,
-		        l.sim_scenario
+		        l.sim_scenario, l.incident_setup, l.duration_minutes,
+		        EXISTS (SELECT 1 FROM lab_incidents x
+		                 WHERE x.lab_id = l.id AND x.active) AS is_incident
 		   FROM labs l
 		   LEFT JOIN lab_images i ON i.id = l.lab_image_id AND i.active
 		   JOIN courses c         ON c.id = l.course_id
-		  WHERE l.slug = ? AND c.status = 'published'`, labSlug,
+		  WHERE l.slug = ?
+		    AND (c.status = 'published'
+		         OR EXISTS (SELECT 1 FROM lab_incidents x
+		                     WHERE x.lab_id = l.id AND x.active))`, labSlug,
 	).Scan(&row)
 	if res.Error != nil {
 		return nil, res.Error
@@ -59,13 +71,92 @@ func (r *SessionRepo) SpecBySlug(ctx context.Context, labSlug string) (*domain.S
 		return nil, domain.ErrLabNotFound
 	}
 	return &domain.Spec{
-		LabID:       row.LabID,
-		LabSlug:     row.LabSlug,
-		LabTitle:    row.LabTitle,
-		CourseSlug:  row.CourseSlug,
-		Image:       row.Image,
-		SimScenario: row.SimScenario,
+		LabID:           row.LabID,
+		LabSlug:         row.LabSlug,
+		LabTitle:        row.LabTitle,
+		CourseSlug:      row.CourseSlug,
+		Image:           row.Image,
+		SimScenario:     row.SimScenario,
+		IncidentSetup:   row.IncidentSetup,
+		IsIncident:      row.IsIncident,
+		DurationMinutes: row.DurationMinutes,
 	}, nil
+}
+
+// PickIncident draws one of the lab's usable scenarios. ErrNoIncident means the
+// lab is an ordinary one — every container lab answers that, so this is also the
+// question that tells the two apart, asked in the one place that needs to know.
+//
+// The draw is ORDER BY random() rather than a shuffle in Go: the set is a handful
+// of rows behind a partial index, and picking in the database keeps the choice in
+// the same statement that reads the candidates. Nothing here has to be
+// reproducible — a student meeting the same fault twice in a row is a coin, not a
+// bug.
+func (r *SessionRepo) PickIncident(ctx context.Context, labID int64) (*domain.Incident, error) {
+	var inc domain.Incident
+	res := r.db.WithContext(ctx).Raw(
+		`SELECT id, title, break_script, reveal_md, rps
+		   FROM lab_incidents
+		  WHERE lab_id = ? AND active
+		  ORDER BY random()
+		  LIMIT 1`, labID,
+	).Scan(&inc)
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil, domain.ErrNoIncident
+	}
+	return &inc, nil
+}
+
+// IncidentByID reads a scenario back for a session that already drew it,
+// retired or not: a report describing a drill has to name the fault even after
+// the author has stopped handing it out.
+func (r *SessionRepo) IncidentByID(ctx context.Context, id int64) (*domain.Incident, error) {
+	var inc domain.Incident
+	res := r.db.WithContext(ctx).Raw(
+		`SELECT id, title, break_script, reveal_md, rps
+		   FROM lab_incidents WHERE id = ?`, id,
+	).Scan(&inc)
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil, domain.ErrNoIncident
+	}
+	return &inc, nil
+}
+
+// SetIncident records which fault the session was handed. Written after the
+// break script has actually run: a row claiming a fault that was never applied
+// would send the student hunting for something that is not there.
+func (r *SessionRepo) SetIncident(ctx context.Context, id string, incidentID int64) error {
+	return r.db.WithContext(ctx).Exec(
+		`UPDATE lab_sessions SET incident_id = ? WHERE id = ?`, incidentID, id,
+	).Error
+}
+
+// CommandLog reads back what was captured when the session ended. Empty for a
+// session that never drew a fault, for one whose container had nothing in its
+// history, and for one whose capture failed — all three are the same to a report,
+// which shows no timeline rather than an explanation of why there is none.
+func (r *SessionRepo) CommandLog(ctx context.Context, id string) (string, error) {
+	var log string
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT command_log FROM lab_sessions WHERE id = ?`, id,
+	).Scan(&log).Error
+	return log, err
+}
+
+// SaveCommandLog stores the shell history of a finished incident session. Only
+// ever called with a log that was read moments earlier from the container the
+// session owns, and only for incident sessions: it is a record of what a person
+// typed, so no lab that has no use for it carries one.
+func (r *SessionRepo) SaveCommandLog(ctx context.Context, id, log string) error {
+	return r.db.WithContext(ctx).Exec(
+		`UPDATE lab_sessions SET command_log = ? WHERE id = ?`, log, id,
+	).Error
 }
 
 // Create claims the user's one running slot. The unique index is what actually
@@ -95,11 +186,13 @@ func (r *SessionRepo) SetContainer(ctx context.Context, id, containerID string) 
 // unpublished still has a container attached to it, and the student still has to
 // be able to reach that session to end it.
 const sessionSelect = `SELECT s.id, s.user_id, s.lab_id, s.container_id, s.status,
-       s.started_at, s.expires_at, s.ended_at,
+       s.started_at, s.expires_at, s.ended_at, s.incident_id,
+       COALESCE(i.rps, 0) AS incident_rps,
        COALESCE(l.slug, '') AS lab_slug, COALESCE(c.slug, '') AS course_slug
   FROM lab_sessions s
-  LEFT JOIN labs l    ON l.id = s.lab_id
-  LEFT JOIN courses c ON c.id = l.course_id`
+  LEFT JOIN labs l          ON l.id = s.lab_id
+  LEFT JOIN courses c       ON c.id = l.course_id
+  LEFT JOIN lab_incidents i ON i.id = s.incident_id`
 
 func (r *SessionRepo) ByID(ctx context.Context, id string) (*domain.Session, error) {
 	var s domain.Session
@@ -144,7 +237,8 @@ func (r *SessionRepo) End(ctx context.Context, id string, status domain.Status) 
 func (r *SessionRepo) DueForReaping(ctx context.Context, limit int) ([]domain.Session, error) {
 	sessions := []domain.Session{}
 	err := r.db.WithContext(ctx).Raw(
-		`SELECT id, user_id, lab_id, container_id, status, started_at, expires_at, ended_at
+		`SELECT id, user_id, lab_id, container_id, status, started_at, expires_at,
+		        ended_at, incident_id
 		   FROM lab_sessions
 		  WHERE status = 'running' AND expires_at <= ?
 		  ORDER BY expires_at

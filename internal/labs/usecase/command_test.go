@@ -23,6 +23,12 @@ func TestRanCommand(t *testing.T) {
 		{"đáp án rỗng", history, "", false},
 		{"đáp án chỉ có khoảng trắng", history, "   \n\t", false},
 
+		// Từ khi bashrc bật HISTTIMEFORMAT, mỗi lệnh trong file có thêm một dòng
+		// `#<epoch>` đứng trước. Dòng đó không được che mất lệnh nằm ngay dưới nó.
+		// Bản thân dòng stamp có khớp được một đáp án hình dạng `#1786400000` hay
+		// không thì không ai quan tâm: không tác giả nào viết đáp án như thế.
+		{"history có dấu thời gian vẫn chấm được", "#1786400000\nuname -a\n", "uname -a", true},
+
 		// Cụm cờ ngắn: với người gõ đây là cùng một lệnh, nên cùng một đáp án.
 		{"đảo thứ tự trong cụm cờ", history, "ls -al /", true},
 		{"tách cụm cờ ra rời", history, "ls -a -l /", true},

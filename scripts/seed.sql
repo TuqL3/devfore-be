@@ -2243,6 +2243,174 @@ JOIN (VALUES
 WHERE l.slug = 'cicd-lab-1'
 AND NOT EXISTS (SELECT 1 FROM lab_tasks t WHERE t.lab_id = l.id AND t.order_idx = v.idx);
 
+-- ===========================================================================
+-- TRỰC SỰ CỐ
+--
+-- Lab ở đây ngược chiều mọi lab khác: container mở ra là đã hỏng sẵn, và việc
+-- của học viên là tìm ra vì sao rồi cứu nó. Một lab mang nhiều kịch bản, mỗi
+-- phiên bốc ngẫu nhiên một cái — nên chơi lại là một ca trực khác, không phải
+-- một bài đã thuộc.
+--
+-- Ba kịch bản dưới đây phá **cùng một dịch vụ** theo ba cách. Đó là điều kiện
+-- để chúng dùng chung một câu hỏi và một check_script: thứ học viên thấy luôn
+-- giống nhau — /healthz không trả `ok` — chỉ nguyên nhân là khác.
+-- ===========================================================================
+
+-- Khoá này là **chỗ neo, không phải nội dung**: `labs.course_id` là NOT NULL nên
+-- một lab phải thuộc về một khoá nào đó. Để `draft` để nó không hiện ở /courses
+-- — War Room vào từ thanh nav, không đi qua khoá học nào, và người dùng không
+-- phải đăng ký gì. `SpecBySlug` và `Start` đều miễn trừ lab sự cố khỏi hai rào
+-- đó, nên `draft` ở đây không chặn ai bắt đầu.
+INSERT INTO courses (slug, title, description, level, status, image_url)
+VALUES
+    ('truc-su-co', 'Trực Sự Cố',
+     'Chỗ neo dữ liệu cho các thử thách War Room. Không phải khoá học, không hiện ở danh sách khoá.',
+     'intermediate', 'draft',
+     'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800')
+ON CONFLICT (slug) DO NOTHING;
+
+-- incident_setup dựng dịch vụ; kịch bản phá nó ngay sau đó, trong cùng một
+-- shell dưới `set -e`. Ở lab chứ không ở từng kịch bản: cả ba phá chung một
+-- dịch vụ, chép setup ba lần là ba chỗ để trôi khác nhau.
+INSERT INTO labs (course_id, slug, title, description_md, duration_minutes,
+                  lab_image_id, incident_setup, order_idx)
+SELECT c.id, v.slug, v.title, v.body, v.minutes,
+       (SELECT id FROM lab_images WHERE name = 'devforge/net' AND tag = 'latest'),
+       v.setup, v.idx
+FROM courses c
+JOIN (VALUES
+    ('incident-lab-1', 'Ca Trực Đầu Tiên', 15, 0, $md$**23:41.** Điện thoại rung. Trang chủ trả lỗi, khách đang kêu trên mạng xã hội.
+
+Bạn chỉ biết chừng đó — đúng như lúc trực thật.
+
+### Việc của bạn
+
+Dịch vụ web chạy ở `http://127.0.0.1:8080`, và nó có một đường
+`/healthz` trả về đúng chữ `ok` khi mọi thứ bình thường:
+
+```sh
+curl -i http://127.0.0.1:8080/healthz
+```
+
+Làm cho câu lệnh đó trả `ok` trở lại. Xong thì bấm **Kiểm tra** — đó cũng là lúc
+đồng hồ sự cố dừng, nên đừng sửa xong rồi ngồi đọc tiếp.
+
+### Không ai nói bạn hỏng ở đâu
+
+Cố ý. Mò ra hỏng ở đâu **là** bài học; biết trước thì phần còn lại chỉ là gõ.
+Mấy chỗ đáng nhìn trước:
+
+```sh
+curl -v http://127.0.0.1:8080/healthz   # nó im lặng, hay nó trả lỗi?
+ss -ltn                                  # có ai đang giữ cổng 8080 không?
+ps aux                                   # tiến trình nào đang chạy, chạy với tham số gì?
+ls -l ~/web                              # file còn đó không, quyền còn đọc được không?
+```
+
+Dịch vụ được dựng bằng `httpd` của busybox, phục vụ thư mục `~/web`:
+
+```sh
+httpd -p 127.0.0.1:8080 -h ~/web
+```
+
+> Mọi lệnh bạn gõ trong phiên này được ghi lại, và hiện ở trang kết quả sau khi
+> kết thúc — để bạn thấy mình đã mất bao lâu ở hướng nào. Chỉ bạn và quản trị
+> viên đọc được, và nó mất cùng lúc với phiên.$md$,
+     $sh$mkdir -p "$HOME/web"
+printf 'chao devforge\n' > "$HOME/web/index.html"
+printf 'ok\n' > "$HOME/web/healthz"
+httpd -p 127.0.0.1:8080 -h "$HOME/web"$sh$)
+) AS v(slug, title, minutes, idx, body, setup) ON true
+WHERE c.slug = 'truc-su-co'
+AND NOT EXISTS (SELECT 1 FROM labs l WHERE l.slug = v.slug);
+
+-- Một câu hỏi duy nhất, và nó là câu hỏi của cả ba kịch bản: dịch vụ sống lại
+-- chưa. Không hỏi "nguyên nhân là gì" — cái đó hiện ở trang kết quả sau khi
+-- xong, chứ hỏi trong lúc làm thì nó thành đáp án trắc nghiệm cho chính bài.
+INSERT INTO lab_tasks (lab_id, title, hint, points, kind, check_script, expected_commands, options, order_idx)
+SELECT l.id, v.title, v.hint, 20, 'script', v.script, '', '[]'::jsonb, v.idx
+FROM labs l
+JOIN (VALUES
+    (0, 'Khôi phục dịch vụ: /healthz ở cổng 8080 trả về ok',
+     'Ba câu hỏi theo thứ tự đó: có ai nghe ở cổng 8080 không (ss -ltn), tiến trình đang nghe là cái gì và trỏ vào đâu (ps aux), thư mục nó phục vụ còn đọc được không (ls -l ~/web).',
+     'curl -fsS --max-time 5 http://127.0.0.1:8080/healthz | grep -q ok')
+) AS v(idx, title, hint, script) ON true
+WHERE l.slug = 'incident-lab-1'
+AND NOT EXISTS (SELECT 1 FROM lab_tasks t WHERE t.lab_id = l.id AND t.order_idx = v.idx);
+
+-- Ba kịch bản. `rps` cố tình giống nhau ở cả ba: ba con số khác nhau biến thanh
+-- đếm request hỏng thành vân tay nhận diện kịch bản ngay giây đầu tiên.
+--
+-- Mỗi break_script chạy sau setup, nên dịch vụ lúc đó đang chạy tốt.
+INSERT INTO lab_incidents (lab_id, title, break_script, reveal_md, rps)
+SELECT l.id, v.title, v.script, v.reveal, 20
+FROM labs l
+JOIN (VALUES
+    ('Tiến trình web đã chết',
+     $sh$pkill httpd$sh$,
+     $md$### Tiến trình `httpd` không còn chạy
+
+Không ai nghe ở cổng 8080 cả, nên `curl` báo **Failed to connect** chứ không trả
+về mã lỗi HTTP nào. Đó là dấu hiệu tách bạch nhất trong ba kịch bản: hỏng ở tầng
+kết nối, không phải ở tầng ứng dụng.
+
+Đường tìm ra: `ss -ltn` không thấy dòng nào cho 8080, `ps aux` không thấy
+`httpd`. Sửa bằng cách chạy lại nó:
+
+```sh
+httpd -p 127.0.0.1:8080 -h ~/web
+```
+
+Ngoài đời không ai chạy tay như vậy — process manager (systemd, supervisor,
+container restart policy) tự bật lại. Câu hỏi thật khi gặp cảnh này là **vì sao
+nó chết**, và câu trả lời gần như luôn nằm trong log hoặc trong OOM killer.$md$),
+
+    ('Tiến trình khác đang giữ cổng 8080',
+     $sh$pkill httpd
+mkdir -p "$HOME/old-release"
+printf 'ban cu, khong co healthz\n' > "$HOME/old-release/index.html"
+httpd -p 127.0.0.1:8080 -h "$HOME/old-release"$sh$,
+     $md$### Cổng 8080 bị một `httpd` khác chiếm, và nó phục vụ nhầm thư mục
+
+Cổng vẫn có người nghe, nên `curl` **kết nối được** — chỉ là `/healthz` trả
+**404**. Một dịch vụ trả lời sai khác hẳn một dịch vụ không trả lời, và đó là
+thứ phân biệt kịch bản này với kịch bản "tiến trình đã chết".
+
+Đường tìm ra: `ss -ltn` thấy 8080 đang LISTEN, `ps aux` thấy `httpd` chạy với
+`-h /home/student/old-release` — sai thư mục. Sửa: giết nó rồi bật lại đúng chỗ.
+
+```sh
+pkill httpd
+httpd -p 127.0.0.1:8080 -h ~/web
+```
+
+Ngoài đời đây là cảnh deploy hụt: bản cũ chưa tắt hẳn, bản mới không gắn được
+cổng nên chết ngay lúc khởi động, và thứ đang phục vụ khách là bản đáng lẽ đã bị
+thay. Bài học: **cổng có người nghe không có nghĩa là đúng người đang nghe.**$md$),
+
+    ('Thư mục web mất quyền đọc',
+     $sh$chmod 000 "$HOME/web"$sh$,
+     $md$### `~/web` bị `chmod 000`
+
+`httpd` vẫn chạy, cổng vẫn LISTEN, nhưng nó không mở nổi file trong thư mục nên
+mọi đường dẫn đều ra **404** — kể cả `/index.html` vốn vẫn nằm nguyên đó.
+
+Đường tìm ra: `ls -ld ~/web` cho ra `d---------`. Sửa:
+
+```sh
+chmod 755 ~/web
+```
+
+Chỗ dễ mất thì giờ nhất ở kịch bản này là tin vào mã lỗi: 404 đọc ra là "file
+không tồn tại", nên người ta đi tìm file trước khi nhìn quyền — mà file vẫn ở
+đó. Ngoài đời cảnh này hay tới sau một lệnh `chmod`/`chown` chạy nhầm thư mục,
+hoặc một tiến trình deploy chạy dưới user khác.$md$)
+) AS v(title, script, reveal) ON true
+WHERE l.slug = 'incident-lab-1'
+AND NOT EXISTS (
+    SELECT 1 FROM lab_incidents i WHERE i.lab_id = l.id AND i.title = v.title
+);
+
 -- Không seed tài khoản nào. Hai tài khoản một máy mới cần — một admin, một học
 -- viên — do migration 000020 tạo, nên chúng tồn tại kể cả khi file này không
 -- được chạy. Bảng xếp hạng vì thế trống cho tới khi có người thật kiếm được

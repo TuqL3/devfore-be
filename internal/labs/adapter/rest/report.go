@@ -63,6 +63,31 @@ type reportAnswer struct {
 	Attempts   *int       `json:"attempts"`
 }
 
+// incidentTimelineEntry is one attempt, as the result screen replays it. `at` is
+// null for a command the shell recorded without a time — the lab images only
+// started stamping history recently, and a session from before that still has a
+// list worth reading.
+type incidentTimelineEntry struct {
+	At      *time.Time `json:"at"`
+	Command string     `json:"command"`
+}
+
+// incidentReport names the fault, so like the answer key above it, it is only
+// ever built for a session that has ended.
+type incidentReport struct {
+	Title    string `json:"title"`
+	RevealMD string `json:"reveal_md"`
+	// Assumed requests per second, sent so the screen can say what the count is
+	// derived from instead of presenting it as measured.
+	RPS int `json:"rps"`
+	// Null when the service was never restored: the drill ended with the outage
+	// still going, which is a result rather than a missing field.
+	RecoveredAt     *time.Time              `json:"recovered_at"`
+	DowntimeSeconds int                     `json:"downtime_seconds"`
+	RequestsFailed  int                     `json:"requests_failed"`
+	Timeline        []incidentTimelineEntry `json:"timeline"`
+}
+
 type reportResponse struct {
 	SessionID   string         `json:"session_id"`
 	LabTitle    string         `json:"lab_title"`
@@ -75,6 +100,9 @@ type reportResponse struct {
 	Correct     int            `json:"correct"`
 	Total       int            `json:"total"`
 	Answers     []reportAnswer `json:"answers"`
+	// Null for every lab that is not an incident lab, which is what the client
+	// branches on to decide whether the drill half of the screen exists at all.
+	Incident *incidentReport `json:"incident"`
 }
 
 func newReport(r *domain.Report) reportResponse {
@@ -94,6 +122,7 @@ func newReport(r *domain.Report) reportResponse {
 		}
 	}
 	return reportResponse{
+		Incident:    newIncidentReport(r.Incident),
 		SessionID:   r.SessionID,
 		LabTitle:    r.LabTitle,
 		LabSlug:     r.LabSlug,
@@ -105,6 +134,30 @@ func newReport(r *domain.Report) reportResponse {
 		Correct:     r.Correct,
 		Total:       r.Total,
 		Answers:     answers,
+	}
+}
+
+func newIncidentReport(inc *domain.IncidentReport) *incidentReport {
+	if inc == nil {
+		return nil
+	}
+	timeline := make([]incidentTimelineEntry, len(inc.Timeline))
+	for i, e := range inc.Timeline {
+		entry := incidentTimelineEntry{Command: e.Command}
+		if !e.At.IsZero() {
+			at := e.At
+			entry.At = &at
+		}
+		timeline[i] = entry
+	}
+	return &incidentReport{
+		Title:           inc.Title,
+		RevealMD:        inc.RevealMD,
+		RPS:             inc.RPS,
+		RecoveredAt:     inc.RecoveredAt,
+		DowntimeSeconds: inc.DowntimeSeconds,
+		RequestsFailed:  inc.RequestsFailed,
+		Timeline:        timeline,
 	}
 }
 

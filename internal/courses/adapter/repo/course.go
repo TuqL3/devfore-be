@@ -149,6 +149,53 @@ func (r *CourseRepo) LabsByCourse(ctx context.Context, courseID int64) ([]domain
 	return labs, err
 }
 
+// Drills are the War Room's list: every lab that has an incident scenario ready
+// to hand out. They are not course material and are not reached through a course
+// — the course row a lab points at is only a place for it to live — so nothing
+// here filters on course status or enrolment.
+//
+// Having an active lab_incidents row is what makes a lab a drill, the same fact
+// the runtime asks when it decides whether to break the container. One rule, one
+// place it is written down.
+func (r *CourseRepo) Drills(ctx context.Context) ([]domain.Lab, error) {
+	labs := []domain.Lab{}
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT l.id, l.slug, l.title, l.description_md, l.duration_minutes, l.order_idx,
+			false                                                                  AS is_sim,
+			(SELECT count(*) FROM lab_tasks t WHERE t.lab_id = l.id)               AS task_count,
+			COALESCE((SELECT sum(points) FROM lab_tasks t WHERE t.lab_id = l.id), 0) AS points
+		   FROM labs l
+		  WHERE EXISTS (SELECT 1 FROM lab_incidents i WHERE i.lab_id = l.id AND i.active)
+		  ORDER BY l.order_idx, l.id`,
+	).Scan(&labs).Error
+	return labs, err
+}
+
+// DrillBySlug is LabBySlug without the course in the path, for the same reason:
+// a drill is addressed by itself. Refuses a lab that is not a drill rather than
+// answering for it, or this becomes a way to read any lab's page while skipping
+// the enrolment its course asks for.
+func (r *CourseRepo) DrillBySlug(ctx context.Context, slug string) (*domain.Lab, error) {
+	var lab domain.Lab
+	res := r.db.WithContext(ctx).Raw(
+		`SELECT l.id, l.slug, l.title, l.description_md, l.duration_minutes, l.order_idx,
+			false                                                                  AS is_sim,
+			(SELECT count(*) FROM lab_tasks t WHERE t.lab_id = l.id)               AS task_count,
+			COALESCE((SELECT sum(points) FROM lab_tasks t WHERE t.lab_id = l.id), 0) AS points
+		   FROM labs l
+		  WHERE l.slug = ?
+		    AND EXISTS (SELECT 1 FROM lab_incidents i WHERE i.lab_id = l.id AND i.active)`,
+		slug,
+	).Scan(&lab)
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil, domain.ErrLabNotFound
+	}
+	return &lab, nil
+}
+
 // Lab slugs are unique across the whole table, but the lookup is still scoped to
 // the course so a lab cannot be reached through the wrong course's URL.
 //

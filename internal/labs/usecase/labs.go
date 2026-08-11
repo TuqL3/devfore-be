@@ -62,12 +62,18 @@ func (l *Labs) Start(ctx context.Context, userID int64, labSlug string) (StartOu
 	// Enrolment is checked here rather than in the handler, because this is the
 	// one place every way of starting a lab passes through — and it is checked
 	// before the container exists, so a refusal costs nothing to undo.
-	enrolled, err := l.repo.IsEnrolled(ctx, userID, labSlug)
-	if err != nil {
-		return StartOutput{}, err
-	}
-	if !enrolled {
-		return StartOutput{}, domain.ErrNotEnrolled
+	//
+	// A drill skips it. The War Room is a challenge you walk into from the nav,
+	// not material inside a course, so there is no enrolment for it to be part
+	// of — the course row behind the lab is a place for it to live, not a gate.
+	if !spec.IsIncident {
+		enrolled, err := l.repo.IsEnrolled(ctx, userID, labSlug)
+		if err != nil {
+			return StartOutput{}, err
+		}
+		if !enrolled {
+			return StartOutput{}, domain.ErrNotEnrolled
+		}
 	}
 
 	id, err := newSessionID()
@@ -80,7 +86,7 @@ func (l *Labs) Start(ctx context.Context, userID int64, labSlug string) (StartOu
 		LabID:      spec.LabID,
 		Status:     domain.StatusRunning,
 		StartedAt:  time.Now(),
-		ExpiresAt:  time.Now().Add(l.ttl),
+		ExpiresAt:  time.Now().Add(drillDeadline(spec, l.ttl)),
 		LabSlug:    spec.LabSlug,
 		CourseSlug: spec.CourseSlug,
 	}
@@ -108,6 +114,15 @@ func (l *Labs) Start(ctx context.Context, userID int64, labSlug string) (StartOu
 		return StartOutput{}, err
 	}
 	s.ContainerID = containerID
+
+	// The fault goes in last, once there is a container to put it in. A failure
+	// here is treated like a container that would not start: take it all back
+	// rather than hand somebody a drill that broke halfway through being set up.
+	if err := l.applyIncident(ctx, s, spec); err != nil {
+		_ = l.runtime.Remove(context.WithoutCancel(ctx), containerID)
+		_, _ = l.repo.End(context.WithoutCancel(ctx), id, domain.StatusEnded)
+		return StartOutput{}, err
+	}
 	return StartOutput{Session: s, Spec: spec}, nil
 }
 
@@ -184,6 +199,9 @@ func (l *Labs) end(ctx context.Context, s *domain.Session) error {
 		return domain.ErrNotRunning
 	}
 	if s.ContainerID != "" {
+		// The history lives in the container, so it is read while there still is
+		// one. Best effort: it never stands between a container and its removal.
+		l.captureCommandLog(ctx, s)
 		if err := l.runtime.Remove(ctx, s.ContainerID); err != nil {
 			return err
 		}
@@ -217,6 +235,7 @@ func (l *Labs) Submit(
 		return nil, domain.ErrIncomplete
 	}
 	if s.ContainerID != "" {
+		l.captureCommandLog(ctx, s)
 		if err := l.runtime.Remove(ctx, s.ContainerID); err != nil {
 			return nil, err
 		}
@@ -224,7 +243,12 @@ func (l *Labs) Submit(
 	if err := l.grades.Submit(ctx, s.ID); err != nil {
 		return nil, err
 	}
-	return l.grades.Report(ctx, s.ID)
+	rep, err := l.grades.Report(ctx, s.ID)
+	if err != nil {
+		return nil, err
+	}
+	l.attachIncident(ctx, s, rep)
+	return rep, nil
 }
 
 // History is the student's own attempts. Scoped by user id rather than filtered
@@ -245,7 +269,12 @@ func (l *Labs) Report(
 	if s.Status == domain.StatusRunning {
 		return nil, domain.ErrStillRunning
 	}
-	return l.grades.Report(ctx, s.ID)
+	rep, err := l.grades.Report(ctx, s.ID)
+	if err != nil {
+		return nil, err
+	}
+	l.attachIncident(ctx, s, rep)
+	return rep, nil
 }
 
 // Check grades one task against the student's own container and records the
