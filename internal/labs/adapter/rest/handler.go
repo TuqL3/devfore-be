@@ -42,6 +42,14 @@ type sessionResponse struct {
 	// Which of this lab's tasks the student has already passed. Sent with the
 	// session so a reload restores the ticks without a second round trip.
 	PassedTaskIDs []int64 `json:"passed_task_ids"`
+	// Null unless this session drew a fault. Carries the assumed request rate and
+	// nothing else: everything else about the scenario — its name, what it broke,
+	// how it is found — is what the student is in there working out.
+	Incident *sessionIncident `json:"incident"`
+}
+
+type sessionIncident struct {
+	RPS int `json:"rps"`
 }
 
 // respondSession answers with the session and the progress that belongs to it.
@@ -60,7 +68,12 @@ func (h *Handler) respondSession(c *gin.Context, code int, s *domain.Session) {
 }
 
 func newSessionResponse(s *domain.Session) sessionResponse {
+	var inc *sessionIncident
+	if s.IncidentID != nil {
+		inc = &sessionIncident{RPS: s.IncidentRPS}
+	}
 	return sessionResponse{
+		Incident:    inc,
 		ID:          s.ID,
 		LabID:       s.LabID,
 		LabSlug:     s.LabSlug,

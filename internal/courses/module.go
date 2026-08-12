@@ -62,6 +62,13 @@ func (m *Module) Routes(api *gin.RouterGroup, required, optional, admin gin.Hand
 	// addressed by who is asking, not by which course.
 	api.GET("/me/courses", required, h.MyCourses)
 
+	// War Room. Outside /courses because a drill is not course material: no
+	// enrolment, no published course behind it, and the lab it runs on is
+	// reachable only here. Public for the same reason the course list is —
+	// hiding what the platform offers behind a login answers nobody's question.
+	api.GET("/war-room", h.Drills)
+	api.GET("/war-room/:slug", h.Drill)
+
 	g := api.Group("/courses")
 	g.GET("", h.List)
 	g.GET("/:slug", optional, h.Detail)

@@ -52,4 +52,7 @@ type Report struct {
 	Correct     int
 	Total       int
 	Answers     []ReportAnswer
+	// Set only for a session that drew an incident. Everything a normal lab
+	// reports is above this line; nothing below it changes for one.
+	Incident *IncidentReport
 }

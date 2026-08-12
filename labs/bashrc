@@ -14,6 +14,11 @@ HISTFILESIZE=4000
 HISTCONTROL=
 shopt -s histappend
 PROMPT_COMMAND='history -a'
+# Timestamps go in the file as `#<epoch>` lines, which is what lets an incident
+# drill replay when each attempt was made rather than only their order. Safe for
+# command-kind grading: it compares each line against the accepted commands, and
+# a stamp line matches none of them.
+HISTTIMEFORMAT='%s '
 
 alias ls='ls --color=auto'
 alias ll='ls -alF --color=auto'

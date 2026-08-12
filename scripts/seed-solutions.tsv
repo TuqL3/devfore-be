@@ -79,3 +79,4 @@ net-lab-7	2	getent hosts localhost > /home/student/getent.txt
 net-lab-8	0	mkdir -p /home/student/web && echo "<h1>chao devforge</h1>" > /home/student/web/index.html && httpd -p 8080 -h /home/student/web && sleep 1
 net-lab-8	1	printf 'GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' | nc 127.0.0.1 8080 > /home/student/tho.txt
 net-lab-8	2	printf 'GET /khong-co HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n' | nc 127.0.0.1 8080 > /home/student/tho-404.txt
+incident-lab-1	0	mkdir -p /home/student/web && printf "ok\n" > /home/student/web/healthz && httpd -p 127.0.0.1:8080 -h /home/student/web && sleep 1

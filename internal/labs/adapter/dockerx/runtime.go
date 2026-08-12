@@ -61,7 +61,8 @@ func (r *Runtime) Create(ctx context.Context, sessionID, image string) (string, 
 		// nothing and changes every session.
 		Hostname: "devforge",
 		// PID 1 has to outlive its own start: every terminal and every check
-		// script arrives later as a separate exec.
+		// script arrives later as a separate exec. It runs as a child of the init
+		// below rather than as PID 1 itself — see HostConfig.Init.
 		Cmd:        []string{"sleep", "infinity"},
 		WorkingDir: homeDir,
 		Tty:        false,
@@ -80,6 +81,13 @@ func (r *Runtime) Create(ctx context.Context, sessionID, image string) (string, 
 		Tmpfs:       map[string]string{"/tmp": tmpMount, homeDir: homeMount},
 		NetworkMode: "none",
 		AutoRemove:  false, // the reaper owns removal, so a crash still leaves a row to clean
+		// docker-init as PID 1, so orphaned processes get reaped. Without it PID 1
+		// is `sleep infinity`, which never calls wait(): a student who kills a
+		// background service leaves its corpse in `ps` as `[name]` for the rest of
+		// the session. That is a false clue in an incident drill — the process
+		// looks like it is still there — and plain noise in the Linux labs, where
+		// `ps` is one of the ten commands being taught.
+		Init: ptr(true),
 	}
 
 	res, err := r.c.ContainerCreate(ctx, cfg, host, nil, nil, ContainerName(sessionID))

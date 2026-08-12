@@ -45,6 +45,10 @@ var (
 	// asked for this material — so the check belongs on the way in, not on the
 	// button that happens to be the usual way there.
 	ErrNotEnrolled = errors.New("not enrolled in the course")
+	// The lab has no usable incident scenario. Not an error on its own — every
+	// container lab answers this — so it is what tells the two kinds of lab
+	// apart, in the one place that asks.
+	ErrNoIncident = errors.New("lab has no incident scenario")
 	// The daily budget for AI-generated scenarios is spent. Every generation is
 	// a paid call against a real account, so this is a cost control before it is
 	// anything else — and it is reported to the person rather than logged,

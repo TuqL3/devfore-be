@@ -81,6 +81,7 @@ start_container() {
 		--tmpfs /home/student:rw,exec,nosuid,size=64m,uid=1000,gid=1000 \
 		-u 1000:1000 -w /home/student \
 		--memory 512m --pids-limit 256 \
+		--init \
 		"$2" sleep 900 >/dev/null
 }
 

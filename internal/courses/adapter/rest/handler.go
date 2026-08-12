@@ -71,6 +71,34 @@ func (h *Handler) Lab(c *gin.Context) {
 	}
 }
 
+// Drills is the War Room list. Public like the course list is: what the platform
+// offers has to be readable before signing up, or the answer to "đăng ký để dùng
+// cái gì?" is a login wall.
+func (h *Handler) Drills(c *gin.Context) {
+	labs, err := h.uc.Drills(c.Request.Context())
+	if err != nil {
+		serverError(c, err)
+		return
+	}
+	out := make([]labResponse, len(labs))
+	for i := range labs {
+		out[i] = newLab(&labs[i])
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (h *Handler) Drill(c *gin.Context) {
+	lab, err := h.uc.Drill(c.Request.Context(), c.Param("slug"))
+	switch {
+	case errors.Is(err, domain.ErrLabNotFound):
+		abort(c, http.StatusNotFound, "thử thách không tồn tại")
+	case err != nil:
+		serverError(c, err)
+	default:
+		c.JSON(http.StatusOK, newLabDetail(lab))
+	}
+}
+
 func (h *Handler) Enroll(c *gin.Context) {
 	err := h.uc.Enroll(c.Request.Context(), userID(c), c.Param("slug"))
 	if errors.Is(err, domain.ErrNotFound) {

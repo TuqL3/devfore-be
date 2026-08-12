@@ -61,6 +61,20 @@ type labResponse struct {
 	Points    int  `json:"points"`
 }
 
+func newLab(l *domain.Lab) labResponse {
+	return labResponse{
+		ID:              l.ID,
+		Slug:            l.Slug,
+		Title:           l.Title,
+		DescriptionMD:   l.DescriptionMD,
+		DurationMinutes: l.DurationMinutes,
+		OrderIdx:        l.OrderIdx,
+		IsSim:           l.IsSim,
+		TaskCount:       l.TaskCount,
+		Points:          l.Points,
+	}
+}
+
 type courseDetail struct {
 	courseSummary
 	Enrolled bool          `json:"enrolled"`
@@ -69,18 +83,8 @@ type courseDetail struct {
 
 func newDetail(c *domain.Course) courseDetail {
 	labs := make([]labResponse, len(c.Labs))
-	for i, l := range c.Labs {
-		labs[i] = labResponse{
-			ID:              l.ID,
-			Slug:            l.Slug,
-			Title:           l.Title,
-			DescriptionMD:   l.DescriptionMD,
-			DurationMinutes: l.DurationMinutes,
-			OrderIdx:        l.OrderIdx,
-			IsSim:           l.IsSim,
-			TaskCount:       l.TaskCount,
-			Points:          l.Points,
-		}
+	for i := range c.Labs {
+		labs[i] = newLab(&c.Labs[i])
 	}
 	return courseDetail{
 		courseSummary: newSummary(*c),
@@ -137,17 +141,7 @@ func newLabDetail(l *domain.Lab) labDetail {
 		}
 	}
 	return labDetail{
-		labResponse: labResponse{
-			ID:              l.ID,
-			Slug:            l.Slug,
-			Title:           l.Title,
-			DescriptionMD:   l.DescriptionMD,
-			DurationMinutes: l.DurationMinutes,
-			OrderIdx:        l.OrderIdx,
-			IsSim:           l.IsSim,
-			TaskCount:       l.TaskCount,
-			Points:          l.Points,
-		},
+		labResponse: newLab(l),
 		SimScenario: rawJSON(l.SimScenario),
 		Tasks:       tasks,
 	}
