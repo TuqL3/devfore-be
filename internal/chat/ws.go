@@ -12,6 +12,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+
+	"github.com/devforge/be/internal/i18n"
 )
 
 const (
@@ -58,9 +60,13 @@ func (m *Module) Handle(c *gin.Context) {
 	userID := m.userID(c)
 	username := m.username(c)
 	if userID == 0 || username == "" {
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "chưa đăng nhập"})
+		c.AbortWithStatusJSON(http.StatusUnauthorized,
+			gin.H{"error": i18n.Msg(c, "chưa đăng nhập")})
 		return
 	}
+
+	// Captured before the upgrade: writeLoop outlives the request.
+	lang := i18n.From(c)
 
 	ws, err := m.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -78,7 +84,7 @@ func (m *Module) Handle(c *gin.Context) {
 	feed, leave := m.hub.Join(userID)
 	defer leave()
 
-	go m.writeLoop(ctx, ws, feed)
+	go m.writeLoop(ctx, ws, feed, lang)
 	m.readLoop(ctx, ws, userID, username)
 }
 
@@ -203,7 +209,7 @@ func (m *Module) handleDelete(ctx context.Context, in incoming, userID int64) {
 
 // writeLoop owns the write side: broadcasts, pings, and the close when the
 // authorised window runs out.
-func (m *Module) writeLoop(ctx context.Context, ws *websocket.Conn, feed <-chan Event) {
+func (m *Module) writeLoop(ctx context.Context, ws *websocket.Conn, feed <-chan Event, lang i18n.Lang) {
 	ping := time.NewTicker(pingEvery)
 	defer ping.Stop()
 
@@ -214,7 +220,8 @@ func (m *Module) writeLoop(ctx context.Context, ws *websocket.Conn, feed <-chan 
 			// reconnects instead of showing an error.
 			_ = ws.SetWriteDeadline(time.Now().Add(writeWait))
 			_ = ws.WriteControl(websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "phiên hết hạn"),
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure,
+					i18n.Translate(lang, "phiên hết hạn")),
 				time.Now().Add(writeWait))
 			_ = ws.Close()
 			return
@@ -260,7 +267,8 @@ func (m *Module) Messages(c *gin.Context) {
 	if raw := c.Query("peer"); raw != "" {
 		peer, convErr := strconv.ParseInt(raw, 10, 64)
 		if convErr != nil || peer <= 0 || peer == me {
-			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "peer không hợp lệ"})
+			c.AbortWithStatusJSON(http.StatusBadRequest,
+				gin.H{"error": i18n.Msg(c, "peer không hợp lệ")})
 			return
 		}
 		// Scoped to the caller's own pair. There is no id a client can send
@@ -272,7 +280,8 @@ func (m *Module) Messages(c *gin.Context) {
 	}
 	if err != nil {
 		slog.Error("chat history", "err", err)
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "lỗi máy chủ"})
+		c.AbortWithStatusJSON(http.StatusInternalServerError,
+			gin.H{"error": i18n.Msg(c, "lỗi máy chủ")})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"messages": msgs, "online": m.hub.Count()})
@@ -285,7 +294,8 @@ func (m *Module) Conversations(c *gin.Context) {
 	out, err := m.repo.Conversations(c.Request.Context(), m.userID(c))
 	if err != nil {
 		slog.Error("chat conversations", "err", err)
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "lỗi máy chủ"})
+		c.AbortWithStatusJSON(http.StatusInternalServerError,
+			gin.H{"error": i18n.Msg(c, "lỗi máy chủ")})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"conversations": out})
@@ -297,7 +307,8 @@ func (m *Module) People(c *gin.Context) {
 	out, err := m.repo.People(c.Request.Context(), m.userID(c), c.Query("q"))
 	if err != nil {
 		slog.Error("chat people", "err", err)
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "lỗi máy chủ"})
+		c.AbortWithStatusJSON(http.StatusInternalServerError,
+			gin.H{"error": i18n.Msg(c, "lỗi máy chủ")})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"people": out})

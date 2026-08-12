@@ -11,9 +11,10 @@ import (
 // labCols is the admin view of a lab: the public one leaves out the image, and
 // the counts are read the same way the course page reads them.
 const labCols = `l.id, l.slug, l.title, l.description_md, l.duration_minutes, l.order_idx,
-	l.lab_image_id, l.sim_scenario,
+	l.lab_image_id, l.sim_scenario, l.incident_setup,
 	(SELECT count(*) FROM lab_tasks t WHERE t.lab_id = l.id)                 AS task_count,
-	COALESCE((SELECT sum(points) FROM lab_tasks t WHERE t.lab_id = l.id), 0) AS points`
+	COALESCE((SELECT sum(points) FROM lab_tasks t WHERE t.lab_id = l.id), 0) AS points,
+	(SELECT count(*) FROM lab_incidents i WHERE i.lab_id = l.id AND i.active) AS incident_count`
 
 func (r *CourseRepo) AdminLabs(ctx context.Context, courseID int64) ([]domain.Lab, error) {
 	labs := []domain.Lab{}
@@ -45,12 +46,12 @@ func (r *CourseRepo) CreateLab(ctx context.Context, courseID int64, in domain.La
 	var id int64
 	err := r.db.WithContext(ctx).Raw(
 		`INSERT INTO labs (course_id, slug, title, description_md, duration_minutes, lab_image_id,
-		                   sim_scenario, order_idx)
-		 VALUES (?, ?, ?, ?, ?, ?, ?::jsonb,
+		                   sim_scenario, incident_setup, order_idx)
+		 VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?,
 		         COALESCE((SELECT max(order_idx) + 1 FROM labs WHERE course_id = ?), 0))
 		 RETURNING id`,
 		courseID, in.Slug, in.Title, in.DescriptionMD, in.DurationMinutes, in.LabImageID,
-		nullableJSON(in.SimScenario), courseID,
+		nullableJSON(in.SimScenario), in.IncidentSetup, courseID,
 	).Scan(&id).Error
 	if isSlugTaken(err) {
 		return nil, domain.ErrLabSlugTaken
@@ -64,10 +65,11 @@ func (r *CourseRepo) CreateLab(ctx context.Context, courseID int64, in domain.La
 func (r *CourseRepo) UpdateLab(ctx context.Context, labID int64, in domain.LabInput) (*domain.Lab, error) {
 	res := r.db.WithContext(ctx).Exec(
 		`UPDATE labs SET slug = ?, title = ?, description_md = ?, duration_minutes = ?,
-		        lab_image_id = ?, sim_scenario = ?::jsonb, order_idx = ?, updated_at = now()
+		        lab_image_id = ?, sim_scenario = ?::jsonb, incident_setup = ?,
+		        order_idx = ?, updated_at = now()
 		  WHERE id = ?`,
 		in.Slug, in.Title, in.DescriptionMD, in.DurationMinutes, in.LabImageID,
-		nullableJSON(in.SimScenario), in.OrderIdx, labID,
+		nullableJSON(in.SimScenario), in.IncidentSetup, in.OrderIdx, labID,
 	)
 	if isSlugTaken(res.Error) {
 		return nil, domain.ErrLabSlugTaken
@@ -337,6 +339,172 @@ func (r *CourseRepo) DeleteReview(ctx context.Context, reviewID int64) error {
 	}
 	if res.RowsAffected == 0 {
 		return domain.ErrReviewNotFound
+	}
+	return nil
+}
+
+// ── War Room scenarios ─────────────────────────────────────────────────────
+//
+// Retired rows stay in every read here. The admin screen has to show them: a
+// scenario is retired rather than deleted precisely because finished reports
+// still point at it, and hiding it would leave an author wondering where it
+// went and writing a duplicate.
+
+// AdminDrills is the War Room's own admin list: every lab that carries a
+// scenario, whether or not any of them is active.
+//
+// Retired-only labs stay in it. They are exactly the ones an author is looking
+// for — a lab that dropped out of War Room because its last scenario was turned
+// off is invisible everywhere else, and the student-facing Drills query filters
+// them out by design.
+//
+// A lab with a setup script but no scenario yet is in the list too, and that is
+// what makes the section usable at all: writing the script is how a lab is filed
+// under War Room, and a list that waited for the first scenario would be a list
+// you could never add the first scenario from.
+//
+// LEFT JOIN, and the course fields come back empty for a challenge created in
+// War Room: since 000028 a drill has no course. The join stays only for the
+// older ones that were made inside a course before that was possible.
+func (r *CourseRepo) AdminDrills(ctx context.Context) ([]domain.Drill, error) {
+	drills := []domain.Drill{}
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT l.id, l.slug, l.title, l.duration_minutes, l.lab_image_id,
+		        l.incident_setup, l.drill_status AS status,
+		        c.id AS course_id, COALESCE(c.title, '') AS course_title,
+		        (SELECT count(*) FROM lab_incidents i WHERE i.lab_id = l.id AND i.active) AS incident_count,
+		        (SELECT count(*) FROM lab_incidents i WHERE i.lab_id = l.id)              AS scenario_count
+		   FROM labs l
+		   LEFT JOIN courses c ON c.id = l.course_id
+		  WHERE EXISTS (SELECT 1 FROM lab_incidents i WHERE i.lab_id = l.id)
+		     OR l.incident_setup <> ''
+		  ORDER BY l.id`,
+	).Scan(&drills).Error
+	return drills, err
+}
+
+// CreateDrill makes a War Room challenge, which is a lab belonging to no course.
+//
+// Separate from CreateLab rather than a nil argument to it: the ordering that
+// one derives (`max(order_idx) + 1 FROM labs WHERE course_id = ?`) has no
+// meaning without a course, and a challenge has no siblings to be ordered
+// against anyway.
+func (r *CourseRepo) CreateDrill(ctx context.Context, in domain.LabInput) (*domain.Lab, error) {
+	var id int64
+	err := r.db.WithContext(ctx).Raw(
+		`INSERT INTO labs (course_id, slug, title, description_md, duration_minutes,
+		                   lab_image_id, incident_setup, order_idx)
+		 VALUES (NULL, ?, ?, ?, ?, ?, ?, 0)
+		 RETURNING id`,
+		in.Slug, in.Title, in.DescriptionMD, in.DurationMinutes, in.LabImageID,
+		in.IncidentSetup,
+	).Scan(&id).Error
+	if isSlugTaken(err) {
+		return nil, domain.ErrLabSlugTaken
+	}
+	if err != nil {
+		return nil, err
+	}
+	return r.AdminLab(ctx, id)
+}
+
+// SetDrillStatus is its own write rather than a field of the lab form: taking a
+// challenge down is a decision about the challenge, not an edit of the lab, and
+// folding it into the form would mean every unrelated save re-asserted it.
+func (r *CourseRepo) SetDrillStatus(ctx context.Context, labID int64, status string) error {
+	res := r.db.WithContext(ctx).Exec(
+		`UPDATE labs SET drill_status = ?, updated_at = now() WHERE id = ?`, status, labID,
+	)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return domain.ErrLabNotFound
+	}
+	return nil
+}
+
+// ActiveIncidentCount answers the one question publishing has to ask: is there
+// any fault left to draw. Read separately rather than off the list so the check
+// runs against the row as it is now, not as some earlier page render saw it.
+func (r *CourseRepo) ActiveIncidentCount(ctx context.Context, labID int64) (int, error) {
+	var n int
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT count(*) FROM lab_incidents WHERE lab_id = ? AND active`, labID,
+	).Scan(&n).Error
+	return n, err
+}
+
+const incidentCols = `id, title, break_script, reveal_md, rps, active`
+
+func (r *CourseRepo) AdminIncidents(ctx context.Context, labID int64) ([]domain.Incident, error) {
+	incidents := []domain.Incident{}
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT `+incidentCols+` FROM lab_incidents
+		  WHERE lab_id = ? ORDER BY active DESC, id`, labID,
+	).Scan(&incidents).Error
+	return incidents, err
+}
+
+func (r *CourseRepo) AdminIncident(ctx context.Context, incidentID int64) (*domain.Incident, error) {
+	var inc domain.Incident
+	res := r.db.WithContext(ctx).Raw(
+		`SELECT `+incidentCols+` FROM lab_incidents WHERE id = ?`, incidentID,
+	).Scan(&inc)
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil, domain.ErrIncidentNotFound
+	}
+	return &inc, nil
+}
+
+func (r *CourseRepo) CreateIncident(ctx context.Context, labID int64, in domain.IncidentInput) (*domain.Incident, error) {
+	var id int64
+	err := r.db.WithContext(ctx).Raw(
+		`INSERT INTO lab_incidents (lab_id, title, break_script, reveal_md, rps, active)
+		 VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
+		labID, in.Title, in.BreakScript, in.RevealMD, in.RPS, in.Active,
+	).Scan(&id).Error
+	if isMissingLab(err) {
+		return nil, domain.ErrLabNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return r.AdminIncident(ctx, id)
+}
+
+func (r *CourseRepo) UpdateIncident(ctx context.Context, incidentID int64, in domain.IncidentInput) (*domain.Incident, error) {
+	res := r.db.WithContext(ctx).Exec(
+		`UPDATE lab_incidents SET title = ?, break_script = ?, reveal_md = ?, rps = ?, active = ?
+		  WHERE id = ?`,
+		in.Title, in.BreakScript, in.RevealMD, in.RPS, in.Active, incidentID,
+	)
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil, domain.ErrIncidentNotFound
+	}
+	return r.AdminIncident(ctx, incidentID)
+}
+
+// DeleteIncident only succeeds for a scenario nobody has played. The foreign key
+// from lab_sessions has no ON DELETE clause on purpose, so the database is the
+// one that knows — asking it beforehand would be a second answer that can
+// disagree with the first, and a race between the two.
+func (r *CourseRepo) DeleteIncident(ctx context.Context, incidentID int64) error {
+	res := r.db.WithContext(ctx).Exec(`DELETE FROM lab_incidents WHERE id = ?`, incidentID)
+	if isStillReferenced(res.Error) {
+		return domain.ErrIncidentPlayed
+	}
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return domain.ErrIncidentNotFound
 	}
 	return nil
 }

@@ -22,7 +22,7 @@ func (r *GradeRepo) Task(ctx context.Context, taskID int64) (*domain.Task, error
 	var row struct {
 		ID          int64
 		LabID       int64
-		CourseID    int64
+		CourseID    *int64
 		Points      int
 		Kind        string
 		CheckScript string
@@ -155,14 +155,21 @@ func (r *GradeRepo) Record(
 		// Every press counts as an attempt, passing or not — that is what the
 		// number means on the leaderboard. It also creates the row the score
 		// update below relies on existing.
-		if err := tx.Exec(
-			`INSERT INTO course_scores (user_id, course_id, score, attempts)
-			 VALUES (?, ?, 0, 1)
-			 ON CONFLICT (user_id, course_id) DO UPDATE
-			 SET attempts = course_scores.attempts + 1, updated_at = now()`,
-			userID, t.CourseID,
-		).Error; err != nil {
-			return err
+		//
+		// Skipped entirely for a War Room challenge: it has no course, so there
+		// is no scoreboard the attempt belongs on. What a drill produces is its
+		// report — time to recovery, requests lost, the commands tried — and that
+		// is written from the session, not from here.
+		if t.CourseID != nil {
+			if err := tx.Exec(
+				`INSERT INTO course_scores (user_id, course_id, score, attempts)
+				 VALUES (?, ?, 0, 1)
+				 ON CONFLICT (user_id, course_id) DO UPDATE
+				 SET attempts = course_scores.attempts + 1, updated_at = now()`,
+				userID, *t.CourseID,
+			).Error; err != nil {
+				return err
+			}
 		}
 		if !passed {
 			return nil
@@ -183,12 +190,14 @@ func (r *GradeRepo) Record(
 		}
 		out.PointsAwarded = t.Points
 
-		if err := tx.Exec(
-			`UPDATE course_scores SET score = score + ?, updated_at = now()
-			  WHERE user_id = ? AND course_id = ?`,
-			t.Points, userID, t.CourseID,
-		).Error; err != nil {
-			return err
+		if t.CourseID != nil {
+			if err := tx.Exec(
+				`UPDATE course_scores SET score = score + ?, updated_at = now()
+				  WHERE user_id = ? AND course_id = ?`,
+				t.Points, userID, *t.CourseID,
+			).Error; err != nil {
+				return err
+			}
 		}
 
 		// Whether that was the last task standing. Counting what is left rather
@@ -209,12 +218,15 @@ func (r *GradeRepo) Record(
 			return nil
 		}
 		out.LabCompleted = true
+		if t.CourseID == nil {
+			return nil
+		}
 		// Reached exactly once per lab: it takes the insert above to have written
 		// a row, which only happens for the task that completes the set.
 		return tx.Exec(
 			`UPDATE course_scores SET labs_completed = labs_completed + 1, updated_at = now()
 			  WHERE user_id = ? AND course_id = ?`,
-			userID, t.CourseID,
+			userID, *t.CourseID,
 		).Error
 	})
 	if err != nil {

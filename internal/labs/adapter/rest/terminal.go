@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 
+	"github.com/devforge/be/internal/i18n"
 	"github.com/devforge/be/internal/labs/domain"
 	"github.com/devforge/be/internal/labs/usecase"
 )
@@ -76,6 +77,10 @@ func (t *Terminal) Handle(c *gin.Context) {
 		return
 	}
 
+	// Captured before the upgrade: the goroutines below outlive the request, and
+	// a close frame is the one thing a student reads without any UI around it.
+	lang := i18n.From(c)
+
 	ws, err := t.upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		// Upgrade has already written its own response by this point.
@@ -93,14 +98,15 @@ func (t *Terminal) Handle(c *gin.Context) {
 	if err != nil {
 		slog.Error("terminal attach", "session", s.ID, "err", err)
 		_ = ws.WriteControl(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "không mở được terminal"),
+			websocket.FormatCloseMessage(websocket.CloseInternalServerErr,
+				i18n.Translate(lang, "không mở được terminal")),
 			time.Now().Add(writeWait))
 		return
 	}
 	defer stream.Close()
 
 	slog.Info("terminal open", "session", s.ID, "user", s.UserID)
-	t.pump(ctx, cancel, ws, stream, execID, s)
+	t.pump(ctx, cancel, ws, stream, execID, s, lang)
 	slog.Info("terminal closed", "session", s.ID, "user", s.UserID)
 }
 
@@ -109,9 +115,10 @@ func (t *Terminal) Handle(c *gin.Context) {
 func (t *Terminal) pump(
 	ctx context.Context, cancel context.CancelFunc,
 	ws *websocket.Conn, stream io.ReadWriteCloser, execID string, s *domain.Session,
+	lang i18n.Lang,
 ) {
-	go t.containerToClient(ctx, cancel, ws, stream)
-	go t.keepAlive(ctx, ws)
+	go t.containerToClient(ctx, cancel, ws, stream, lang)
+	go t.keepAlive(ctx, ws, lang)
 	t.clientToContainer(ctx, cancel, ws, stream, execID, s)
 }
 
@@ -157,7 +164,7 @@ func (t *Terminal) clientToContainer(
 
 func (t *Terminal) containerToClient(
 	ctx context.Context, cancel context.CancelFunc,
-	ws *websocket.Conn, stream io.Reader,
+	ws *websocket.Conn, stream io.Reader, lang i18n.Lang,
 ) {
 	defer cancel()
 	buf := make([]byte, streamCopy)
@@ -172,9 +179,9 @@ func (t *Terminal) containerToClient(
 		if err != nil {
 			// The shell exited or the session hit its deadline. Say which, so the
 			// client can tell "you typed exit" from "your hour is up".
-			msg := "shell đã thoát"
+			msg := i18n.Translate(lang, "shell đã thoát")
 			if ctx.Err() != nil {
-				msg = "phiên lab đã hết giờ"
+				msg = i18n.Translate(lang, "phiên lab đã hết giờ")
 			}
 			_ = ws.WriteControl(websocket.CloseMessage,
 				websocket.FormatCloseMessage(websocket.CloseNormalClosure, msg),
@@ -186,14 +193,15 @@ func (t *Terminal) containerToClient(
 
 // keepAlive is also what enforces the deadline: when the context expires the
 // close frame goes out here rather than waiting for the student to type.
-func (t *Terminal) keepAlive(ctx context.Context, ws *websocket.Conn) {
+func (t *Terminal) keepAlive(ctx context.Context, ws *websocket.Conn, lang i18n.Lang) {
 	tick := time.NewTicker(pingEvery)
 	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			_ = ws.WriteControl(websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, "phiên lab đã hết giờ"),
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure,
+					i18n.Translate(lang, "phiên lab đã hết giờ")),
 				time.Now().Add(writeWait))
 			_ = ws.Close()
 			return

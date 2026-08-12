@@ -46,14 +46,16 @@ func (r *SessionRepo) SpecBySlug(ctx context.Context, labSlug string) (*domain.S
 	// depend on a course nobody is meant to see.
 	res := r.db.WithContext(ctx).Raw(
 		`SELECT l.id AS lab_id, l.slug AS lab_slug, l.title AS lab_title,
-		        c.slug AS course_slug,
+		        COALESCE(c.slug, '') AS course_slug,
 		        COALESCE(i.name || ':' || i.tag, '') AS image,
 		        l.sim_scenario, l.incident_setup, l.duration_minutes,
 		        EXISTS (SELECT 1 FROM lab_incidents x
 		                 WHERE x.lab_id = l.id AND x.active) AS is_incident
 		   FROM labs l
 		   LEFT JOIN lab_images i ON i.id = l.lab_image_id AND i.active
-		   JOIN courses c         ON c.id = l.course_id
+		   -- LEFT, because a drill has no course row to publish. The OR below is
+		   -- what lets it through; an inner join would have refused it first.
+		   LEFT JOIN courses c    ON c.id = l.course_id
 		  WHERE l.slug = ?
 		    AND (c.status = 'published'
 		         OR EXISTS (SELECT 1 FROM lab_incidents x

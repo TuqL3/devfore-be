@@ -13,6 +13,15 @@ var (
 	ErrLabSlugTaken   = errors.New("lab slug already exists")
 	ErrTaskNotFound   = errors.New("task not found")
 	ErrReviewNotFound = errors.New("review not found")
+	// War Room scenarios.
+	ErrIncidentNotFound = errors.New("incident not found")
+	// A scenario somebody has already played cannot be deleted: finished sessions
+	// point at the row that broke them and their reports read it back. The
+	// database refuses it; this is that refusal with a name an admin can act on.
+	ErrIncidentPlayed = errors.New("incident has been played")
+	// Publishing a challenge whose scenarios are all switched off would put it in
+	// the list and then break nothing when a student opened it.
+	ErrNoActiveIncident = errors.New("drill has no active incident")
 )
 
 // InvalidInput names the field a form should highlight. Kept as a type rather

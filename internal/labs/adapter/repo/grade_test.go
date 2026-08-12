@@ -35,8 +35,8 @@ func TestRecordAwardsEachTaskOnce(t *testing.T) {
 	r := NewGradeRepo(db)
 	userID, courseID, labID, sessionID, taskIDs := seedGradeFixture(t, db)
 
-	one := &domain.Task{ID: taskIDs[0], LabID: labID, CourseID: courseID, Points: 10}
-	two := &domain.Task{ID: taskIDs[1], LabID: labID, CourseID: courseID, Points: 15}
+	one := &domain.Task{ID: taskIDs[0], LabID: labID, CourseID: &courseID, Points: 10}
+	two := &domain.Task{ID: taskIDs[1], LabID: labID, CourseID: &courseID, Points: 15}
 
 	// A failed attempt counts as an attempt and nothing else.
 	if g, err := r.Record(ctx, userID, sessionID, one, []int{1}, false); err != nil {

@@ -2256,29 +2256,24 @@ AND NOT EXISTS (SELECT 1 FROM lab_tasks t WHERE t.lab_id = l.id AND t.order_idx 
 -- giống nhau — /healthz không trả `ok` — chỉ nguyên nhân là khác.
 -- ===========================================================================
 
--- Khoá này là **chỗ neo, không phải nội dung**: `labs.course_id` là NOT NULL nên
--- một lab phải thuộc về một khoá nào đó. Để `draft` để nó không hiện ở /courses
--- — War Room vào từ thanh nav, không đi qua khoá học nào, và người dùng không
--- phải đăng ký gì. `SpecBySlug` và `Start` đều miễn trừ lab sự cố khỏi hai rào
--- đó, nên `draft` ở đây không chặn ai bắt đầu.
-INSERT INTO courses (slug, title, description, level, status, image_url)
-VALUES
-    ('truc-su-co', 'Trực Sự Cố',
-     'Chỗ neo dữ liệu cho các thử thách War Room. Không phải khoá học, không hiện ở danh sách khoá.',
-     'intermediate', 'draft',
-     'https://images.unsplash.com/photo-1451187580459-43490279c0fa?w=800')
-ON CONFLICT (slug) DO NOTHING;
+-- Không có khoá nào ở đây, và đó là điểm chính. Từ migration 000028
+-- `labs.course_id` nhận NULL, nên một thử thách không phải trú nhờ dưới một khoá
+-- giả nữa — bản seed trước có một khoá tên 'truc-su-co' mà chính mô tả của nó
+-- viết "không phải khoá học", và 000029 đã xoá nó đi.
+--
+-- Hệ quả có thật, không chỉ là dọn dẹp: `Start` không hỏi đăng ký, `SpecBySlug`
+-- không hỏi khoá đã đăng chưa, và `Record` không ghi `course_scores` — thử thách
+-- trả về bản tường trình, không trả về điểm của khoá nào.
 
 -- incident_setup dựng dịch vụ; kịch bản phá nó ngay sau đó, trong cùng một
 -- shell dưới `set -e`. Ở lab chứ không ở từng kịch bản: cả ba phá chung một
 -- dịch vụ, chép setup ba lần là ba chỗ để trôi khác nhau.
 INSERT INTO labs (course_id, slug, title, description_md, duration_minutes,
-                  lab_image_id, incident_setup, order_idx)
-SELECT c.id, v.slug, v.title, v.body, v.minutes,
+                  lab_image_id, incident_setup, order_idx, drill_status)
+SELECT NULL, v.slug, v.title, v.body, v.minutes,
        (SELECT id FROM lab_images WHERE name = 'devforge/net' AND tag = 'latest'),
-       v.setup, v.idx
-FROM courses c
-JOIN (VALUES
+       v.setup, v.idx, 'published'
+FROM (VALUES
     ('incident-lab-1', 'Ca Trực Đầu Tiên', 15, 0, $md$**23:41.** Điện thoại rung. Trang chủ trả lỗi, khách đang kêu trên mạng xã hội.
 
 Bạn chỉ biết chừng đó — đúng như lúc trực thật.
@@ -2320,9 +2315,8 @@ httpd -p 127.0.0.1:8080 -h ~/web
 printf 'chao devforge\n' > "$HOME/web/index.html"
 printf 'ok\n' > "$HOME/web/healthz"
 httpd -p 127.0.0.1:8080 -h "$HOME/web"$sh$)
-) AS v(slug, title, minutes, idx, body, setup) ON true
-WHERE c.slug = 'truc-su-co'
-AND NOT EXISTS (SELECT 1 FROM labs l WHERE l.slug = v.slug);
+) AS v(slug, title, minutes, idx, body, setup)
+WHERE NOT EXISTS (SELECT 1 FROM labs l WHERE l.slug = v.slug);
 
 -- Một câu hỏi duy nhất, và nó là câu hỏi của cả ba kịch bản: dịch vụ sống lại
 -- chưa. Không hỏi "nguyên nhân là gì" — cái đó hiện ở trang kết quả sau khi

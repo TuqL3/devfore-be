@@ -10,11 +10,28 @@ import (
 	"github.com/devforge/be/internal/courses/domain"
 )
 
-const uniqueViolation = "23505"
+const (
+	uniqueViolation     = "23505"
+	foreignKeyViolation = "23503"
+)
 
 func isSlugTaken(err error) bool {
 	var pg *pgconn.PgError
 	return errors.As(err, &pg) && pg.Code == uniqueViolation
+}
+
+// A row still pointed at from elsewhere: a played War Room scenario, which
+// finished reports read back.
+func isStillReferenced(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == foreignKeyViolation
+}
+
+// An insert naming a lab that is not there. Same class of mistake as a bad
+// course id, and worth the same 404 rather than a 500.
+func isMissingLab(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == foreignKeyViolation
 }
 
 // ByID is the admin-side read: unlike BySlug it does not filter on status,

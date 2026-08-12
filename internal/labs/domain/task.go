@@ -17,9 +17,12 @@ const (
 )
 
 type Task struct {
-	ID          int64
-	LabID       int64
-	CourseID    int64
+	ID    int64
+	LabID int64
+	// nil for a War Room challenge, which belongs to no course. Everything that
+	// writes a course scoreboard has to check it — a drill earns a report, not
+	// points on somebody's course.
+	CourseID    *int64
 	Points      int
 	Kind        string
 	CheckScript string

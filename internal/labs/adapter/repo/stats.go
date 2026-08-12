@@ -95,13 +95,16 @@ func (r *GradeRepo) Stats(ctx context.Context) (*domain.Stats, error) {
 		Retried     int
 	}{}
 	if err := r.db.WithContext(ctx).Raw(
-		`SELECT l.id AS lab_id, l.title AS lab_title, c.title AS course_title,
+		`SELECT l.id AS lab_id, l.title AS lab_title,
+		        COALESCE(c.title, '') AS course_title,
 		        count(DISTINCT s.id)                                        AS sessions,
 		        count(DISTINCT s.id) FILTER (WHERE s.status = 'submitted')  AS submitted,
 		        count(a.task_id) FILTER (WHERE a.attempts IS NOT NULL)      AS answered,
 		        count(a.task_id) FILTER (WHERE a.passed AND a.attempts > 1) AS retried
 		   FROM labs l
-		   JOIN courses c       ON c.id = l.course_id
+		   -- LEFT: a drill has no course, and dropping drills out of the admin
+		   -- dashboard would hide exactly the labs somebody is watching.
+		   LEFT JOIN courses c  ON c.id = l.course_id
 		   LEFT JOIN lab_sessions s ON s.lab_id = l.id
 		   LEFT JOIN lab_answers a  ON a.session_id = s.id
 		  GROUP BY l.id, l.title, c.title
