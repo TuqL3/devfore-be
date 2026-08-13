@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/devforge/be/internal/events"
 	"github.com/devforge/be/internal/labs/adapter/dockerx"
 	"github.com/devforge/be/internal/labs/adapter/repo"
 	"github.com/devforge/be/internal/labs/domain"
@@ -57,6 +58,22 @@ type Labs struct {
 	// Ceiling on containers alive at once. Zero means the default; negative
 	// switches the check off, which is what a test that never starts one wants.
 	maxContainers int
+	// Where the failures an admin would act on get written. Optional: nil is a
+	// working system with a quieter screen, which is what every test is.
+	events *events.Recorder
+}
+
+// SetEvents hands the recorder over after construction, the same way audit is
+// wired. Keeps `events` and `labs` two packages rather than a pair with an
+// ordering, and leaves every existing NewLabs call site untouched.
+func (l *Labs) SetEvents(r *events.Recorder) { l.events = r }
+
+// note records one event, and is a no-op when nothing is wired. Every caller is
+// already handling a failure, so this must never add a branch to their path.
+func (l *Labs) note(ctx context.Context, e events.Event) {
+	if l.events != nil {
+		l.events.Record(ctx, e)
+	}
 }
 
 func NewLabs(
@@ -150,6 +167,10 @@ func (l *Labs) Start(
 		// The row is holding the user's only slot for a container that does not
 		// exist. Release it now or they cannot start anything until it expires.
 		_, _ = l.repo.End(context.WithoutCancel(ctx), id, domain.StatusEnded)
+		l.note(ctx, events.Event{
+			Kind: events.KindStartFailed, ActorID: userID, Subject: spec.LabSlug,
+			Detail: "không tạo được container: " + err.Error(),
+		})
 		return StartOutput{}, err
 	}
 	if err := l.repo.SetContainer(ctx, id, containerID); err != nil {
@@ -186,6 +207,10 @@ func (l *Labs) capacity(ctx context.Context) error {
 	}
 	if n >= l.maxContainers {
 		slog.Warn("container capacity reached", "running", n, "max", l.maxContainers)
+		l.note(ctx, events.Event{
+			Kind: events.KindCapacityRefused, Severity: events.SeverityWarn,
+			Detail: fmt.Sprintf("từ chối mở lab: %d/%d container đang chạy", n, l.maxContainers),
+		})
 		return domain.ErrAtCapacity
 	}
 	return nil
@@ -421,6 +446,16 @@ func (l *Labs) Check(
 			// The docker client wraps a cancelled context in its own error, so the
 			// deadline is read off the context rather than unwrapped from it.
 			if runCtx.Err() != nil && ctx.Err() == nil {
+				// Worth an admin's attention rather than a student's: a script that
+				// times out is an authoring bug, and the student is only told to
+				// try again. The task id is the subject because that is the thing
+				// somebody has to go and fix.
+				l.note(ctx, events.Event{
+					Kind: events.KindCheckTimeout, ActorID: userID,
+					Subject: fmt.Sprintf("task %d", task.ID),
+					Detail: fmt.Sprintf("check script của nhiệm vụ %d (lab %d) chạy quá %s",
+						task.ID, task.LabID, checkTimeout),
+				})
 				return domain.Grade{}, domain.ErrCheckTimeout
 			}
 			return domain.Grade{}, err

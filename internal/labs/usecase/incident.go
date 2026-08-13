@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devforge/be/internal/events"
 	"github.com/devforge/be/internal/labs/domain"
 )
 
@@ -88,6 +89,13 @@ func (l *Labs) applyIncident(
 		// key talking, and the line it failed on names the fault outright.
 		slog.Error("incident script failed",
 			"incident", inc.ID, "lab", spec.LabID, "code", code, "out", out)
+		// The event carries the scenario and the exit code, never the output:
+		// that output is the answer key talking, and an admin screen is not where
+		// a break script should be quotable from.
+		l.note(ctx, events.Event{
+			Kind: events.KindIncidentFailed, ActorID: s.UserID, Subject: spec.LabSlug,
+			Detail: fmt.Sprintf("kịch bản %d thoát với mã %d — học viên không mở được ca này", inc.ID, code),
+		})
 		return fmt.Errorf("kịch bản sự cố %d thoát với mã %d", inc.ID, code)
 	}
 
@@ -128,6 +136,11 @@ func (l *Labs) captureCommandLog(ctx context.Context, s *domain.Session) {
 	}
 	if err := l.repo.SaveCommandLog(ctx, s.ID, history); err != nil {
 		slog.Error("incident history save", "session", s.ID, "err", err)
+		l.note(ctx, events.Event{
+			Kind: events.KindHistoryLost, Severity: events.SeverityWarn,
+			ActorID: s.UserID, Subject: s.ID,
+			Detail: "không lưu được dòng thời gian của ca trực: " + err.Error(),
+		})
 	}
 }
 

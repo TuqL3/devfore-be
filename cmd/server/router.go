@@ -35,6 +35,7 @@ func newRouter(cfg *config.Config, sqlDB *sql.DB, authMod *auth.Module, coursesM
 	labsMod.Routes(r, api, authMod.Required(), authMod.AdminOnly())
 	auditRec.Routes(api, authMod.Required(), authMod.AdminOnly())
 	chatMod.Routes(r, api, authMod.Required())
+	chatMod.AdminRoutes(api, authMod.Required(), authMod.AdminOnly())
 
 	return r, nil
 }

@@ -48,7 +48,7 @@ func (l *Labs) Weekly(ctx context.Context, now time.Time) ([]domain.WeeklyLeader
 	if err != nil {
 		return nil, err
 	}
-	since := now.UTC().Truncate(24 * time.Hour).AddDate(0, 0, -(WeeklyDays - 1))
+	since := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -(WeeklyDays - 1))
 	rows, err := l.repo.RecoveriesSince(ctx, since)
 	if err != nil {
 		return nil, err
@@ -116,7 +116,7 @@ func (l *Labs) Streak(ctx context.Context, userID int64, now time.Time) (*domain
 	if err != nil {
 		return nil, err
 	}
-	since := now.UTC().Truncate(24 * time.Hour).AddDate(0, 0, -(ArchiveDays - 1))
+	since := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -(ArchiveDays - 1))
 	rows, err := l.repo.RecoveriesSince(ctx, since)
 	if err != nil {
 		return nil, err

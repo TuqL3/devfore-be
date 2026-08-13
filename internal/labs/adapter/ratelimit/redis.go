@@ -16,6 +16,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/devforge/be/internal/events"
 )
 
 type Redis struct {
@@ -23,10 +25,19 @@ type Redis struct {
 	limit  int
 	window time.Duration
 	prefix string
+	rec    *events.Recorder
 }
 
 func New(c *redis.Client, limit int, window time.Duration, prefix string) *Redis {
 	return &Redis{c: c, limit: limit, window: window, prefix: prefix}
+}
+
+// SetEvents makes the cap visible to an admin. Optional, like everywhere else
+// this recorder is wired: without it the cap still works, quietly.
+func (r *Redis) SetEvents(rec *events.Recorder) {
+	if r != nil {
+		r.rec = rec
+	}
 }
 
 // Middleware counts one request per caller address and refuses past the limit.
@@ -64,6 +75,18 @@ func (r *Redis) Middleware() gin.HandlerFunc {
 			r.c.Expire(c.Request.Context(), key, r.window+time.Second)
 		}
 		if n > int64(r.limit) {
+			// Recorded on the FIRST refusal of a window only. Writing a row per
+			// refused request would mean a flood arrives as a flood of rows, and
+			// the table meant to describe the incident becomes part of it. One row
+			// per address per window is the same signal at a thousandth the cost.
+			if n == int64(r.limit)+1 && r.rec != nil {
+				r.rec.Record(c.Request.Context(), events.Event{
+					Kind: events.KindRateLimited, Severity: events.SeverityWarn,
+					Subject: c.ClientIP(),
+					Detail: "vượt " + strconv.Itoa(r.limit) + " lượt/" +
+						r.window.String() + " trên " + c.Request.URL.Path,
+				})
+			}
 			c.Header("Retry-After", strconv.Itoa(int(r.window.Seconds())))
 			c.AbortWithStatusJSON(http.StatusTooManyRequests,
 				gin.H{"error": "quá nhiều yêu cầu, thử lại sau ít giây"})

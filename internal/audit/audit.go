@@ -25,13 +25,21 @@ const (
 	// Gỡ một báo cáo ai đó đã đăng công khai. Ghi lại vì nó là hành động lên nội
 	// dung của người khác — thứ luôn phải có dấu vết ai làm, lúc nào.
 	ActionDrillUnshare = "drill.unshare"
-	ActionTOTPEnable   = "auth.totp_enable"
-	ActionTOTPDisable  = "auth.totp_disable"
+	// Đọc hoạt động của một người, và đọc lịch sử lệnh của một ca trực. Ghi lại
+	// vì đây là đọc **việc của người khác** — pipeline họ viết, lệnh họ gõ — chứ
+	// không phải đọc một con số của hệ thống.
+	ActionUserActivityRead = "user.activity_read"
+	ActionCommandLogRead   = "lab_session.command_log_read"
+	// Xoá tin nhắn của người khác trong phòng chung.
+	ActionChatDelete  = "chat.delete"
+	ActionTOTPEnable  = "auth.totp_enable"
+	ActionTOTPDisable = "auth.totp_disable"
 )
 
 const (
-	TargetUser    = "user"
-	TargetSession = "lab_session"
+	TargetUser        = "user"
+	TargetSession     = "lab_session"
+	TargetChatMessage = "chat_message"
 )
 
 // Entry is one action as the caller describes it. ActorName and TargetName are

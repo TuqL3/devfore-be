@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/devforge/be/internal/audit"
+	"github.com/devforge/be/internal/events"
 	"github.com/devforge/be/internal/i18n"
 	"github.com/devforge/be/internal/labs/domain"
 	"github.com/devforge/be/internal/labs/usecase"
@@ -23,11 +24,17 @@ type Handler struct {
 	// at the app rather than at the API.
 	publicURL   string
 	frontendURL string
+	events      *events.Recorder
 }
 
 func NewHandler(uc *usecase.Labs, publicURL, frontendURL string) *Handler {
 	return &Handler{uc: uc, publicURL: publicURL, frontendURL: frontendURL}
 }
+
+// SetEvents hands the handler the event recorder, which it reads from for the
+// admin feed and writes to for nothing — every write lives in the usecase, next
+// to the failure it describes.
+func (h *Handler) SetEvents(r *events.Recorder) { h.events = r }
 
 // SetAudit hands the handler the recorder for the one endpoint that ends
 // somebody else's work. Set after construction so labs and audit stay

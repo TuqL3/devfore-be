@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/devforge/be/internal/audit"
+	"github.com/devforge/be/internal/events"
 	"github.com/devforge/be/internal/labs/adapter/dockerx"
 	"github.com/devforge/be/internal/labs/adapter/openrouter"
 	"github.com/devforge/be/internal/labs/adapter/quota"
@@ -97,6 +98,16 @@ func New(ctx context.Context, db *gorm.DB, rdb *redis.Client, cfg Config) (*Modu
 // that ends a session belonging to somebody else.
 func (m *Module) SetAudit(a *audit.Recorder) { m.handler.SetAudit(a) }
 
+// SetEvents wires the system-event recorder into everything in this module that
+// can fail in a way an admin would want to see: starting a lab, running a check
+// script, breaking a service, reaping a container, and the cap on the public
+// routes.
+func (m *Module) SetEvents(r *events.Recorder) {
+	m.uc.SetEvents(r)
+	m.publicLimit.SetEvents(r)
+	m.handler.SetEvents(r)
+}
+
 // StartReaper runs the sweep until ctx is cancelled. Kept separate from New so
 // the caller decides its lifetime alongside the server's.
 func (m *Module) StartReaper(ctx context.Context) { go m.uc.Reap(ctx) }
@@ -115,6 +126,18 @@ func (m *Module) Routes(r *gin.Engine, api *gin.RouterGroup, required, admin gin
 	// screen asking one endpoint beats three round trips the client has to
 	// stitch together.
 	api.GET("/admin/stats", required, admin, h.AdminStats)
+
+	// Màn quản trị đọc. Tất cả admin-only, tất cả chỉ đọc.
+	//
+	// Hai cái cuối có ghi audit: đọc hoạt động của một người và mở lịch sử lệnh
+	// của họ là **đọc việc của người khác**, không phải đọc một con số của hệ
+	// thống — nên ai mở cũng để lại tên.
+	api.GET("/admin/overview", required, admin, h.AdminOverview)
+	api.GET("/admin/events", required, admin, h.AdminEvents)
+	api.GET("/admin/content-health", required, admin, h.AdminContentHealth)
+	api.GET("/admin/shared-drills", required, admin, h.AdminSharedReports)
+	api.GET("/admin/users/:id/activity", required, admin, h.AdminUserActivity)
+	api.GET("/admin/lab-sessions/:id/commands", required, admin, h.AdminSessionCommands)
 
 	// Killing someone else's container. Separate path from the student's own
 	// DELETE /lab-sessions/:id rather than a role branch inside it: that one
