@@ -36,8 +36,8 @@ func TestStatsCountsSessionsOncePerLab(t *testing.T) {
 	r := NewGradeRepo(db)
 	userID, courseID, labID, sessionID, taskIDs := seedGradeFixture(t, db)
 
-	one := &domain.Task{ID: taskIDs[0], LabID: labID, CourseID: courseID, Points: 10}
-	two := &domain.Task{ID: taskIDs[1], LabID: labID, CourseID: courseID, Points: 15}
+	one := &domain.Task{ID: taskIDs[0], LabID: labID, CourseID: &courseID, Points: 10}
+	two := &domain.Task{ID: taskIDs[1], LabID: labID, CourseID: &courseID, Points: 15}
 
 	// Task one takes two presses to pass, task two one. Two answer rows on a
 	// single session, and one of them retried.

@@ -147,3 +147,39 @@ func TestLabDetailWithNoTasksMarshalsEmptyArray(t *testing.T) {
 		t.Errorf(`want "tasks":[], got: %s`, b)
 	}
 }
+
+// lab_incidents.break_script is the answer key of a War Room drill: it says
+// exactly what is wrong, which is the thing the student is there to work out.
+// labs.incident_setup is nearly as bad — it describes the surface the fault is
+// hidden in. Neither may travel on a response a student can reach.
+//
+// Written against the presenter rather than against the query, for the same
+// reason the check_script test is: the query leaving them out today is a fact
+// about today, and the guard has to be that the shape cannot carry them.
+func TestLabDetailNeverSerialisesIncidentSecrets(t *testing.T) {
+	lab := &domain.Lab{
+		ID: 9, Slug: "war-room-nginx", Title: "Nginx chết lúc nửa đêm",
+		DescriptionMD: "Dịch vụ đang 502.", DurationMinutes: 30,
+		// Populated on purpose: an admin read fills these, and the same
+		// domain.Lab is what the public presenter is handed.
+		IncidentSetup: "systemctl start nginx",
+		IncidentCount: 3,
+		Tasks:         []domain.Task{{ID: 1, Title: "Cứu dịch vụ", Points: 50}},
+	}
+
+	b, err := json.Marshal(newLabDetail(lab))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(b)
+
+	for _, leak := range []string{
+		"break_script", "breakScript", "BreakScript",
+		"incident_setup", "incidentSetup", "IncidentSetup",
+		"systemctl start nginx",
+	} {
+		if strings.Contains(body, leak) {
+			t.Errorf("response carries %q:\n%s", leak, body)
+		}
+	}
+}

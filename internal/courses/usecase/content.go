@@ -24,6 +24,15 @@ const (
 	// paste that went wrong rather than against a lab anybody would write.
 	maxSimScenario = 20000
 	maxSimGoal     = 4000
+	// A break script and the shell that stands the service up are both bounded
+	// like check_script is: long enough for a real setup, short enough that a
+	// paste accident is refused rather than stored.
+	maxBreakScript   = 8000
+	maxIncidentSetup = 8000
+	// Requests per second an outage is assumed to hurt. The ceiling is against a
+	// typo — a drill claiming a million rps a second turns the cost counter into
+	// noise, which is the one thing that panel exists to avoid.
+	maxRPS = 100000
 )
 
 // cleanJSON bounds a pasted JSON object and refuses anything that is not one.
@@ -158,6 +167,20 @@ func (c *Courses) cleanLab(ctx context.Context, in domain.LabInput) (domain.LabI
 		return in, domain.InvalidInput{
 			Field:   "sim_scenario",
 			Message: "một lab chỉ có thể là lab container hoặc lab mô phỏng, không thể cả hai",
+		}
+	}
+
+	in.IncidentSetup = strings.TrimSpace(in.IncidentSetup)
+	if len(in.IncidentSetup) > maxIncidentSetup {
+		return in, domain.InvalidInput{Field: "incident_setup", Message: "script quá dài"}
+	}
+	// A sim lab has no container, so there is nothing for a setup script to run
+	// in and nothing for a scenario to break. Refused here rather than left to
+	// confuse an author whose script silently never runs.
+	if len(in.SimScenario) > 0 && in.IncidentSetup != "" {
+		return in, domain.InvalidInput{
+			Field:   "incident_setup",
+			Message: "lab mô phỏng không có container để dựng dịch vụ",
 		}
 	}
 
@@ -359,6 +382,124 @@ func cleanReview(in domain.ReviewInput) (domain.ReviewInput, error) {
 		return in, domain.InvalidInput{Field: "content_md", Message: "nội dung quá dài"}
 	case in.OrderIdx < 0:
 		return in, domain.InvalidInput{Field: "order_idx", Message: "thứ tự không được âm"}
+	}
+	return in, nil
+}
+
+// ── War Room scenarios ─────────────────────────────────────────────────────
+
+// AdminDrills needs no validation and no ownership check beyond the admin role
+// the route already carries: it is a read of everything.
+func (c *Courses) AdminDrills(ctx context.Context) ([]domain.Drill, error) {
+	return c.repo.AdminDrills(ctx)
+}
+
+// CreateDrill makes a challenge that belongs to no course.
+//
+// Runs the same cleanLab as an ordinary lab: a drill is a lab, and every rule
+// there — slug shape, duration bounds, the image-or-scenario exclusion — applies
+// to it unchanged. The setup script is required here and only here, because it
+// is what puts the lab in the War Room list at all; a challenge saved without
+// one would vanish the moment it was created.
+func (c *Courses) CreateDrill(ctx context.Context, in domain.LabInput) (*domain.Lab, error) {
+	clean, err := c.cleanLab(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	if clean.IncidentSetup == "" {
+		return nil, domain.InvalidInput{
+			Field:   "incident_setup",
+			Message: "thử thách phải có script dựng dịch vụ",
+		}
+	}
+	return c.repo.CreateDrill(ctx, clean)
+}
+
+// SetDrillStatus opens or closes a War Room challenge.
+//
+// Publishing one with nothing left to draw is refused: it would sit in the list
+// and then hand a student a container in which nothing is broken, which reads as
+// the platform being broken rather than the drill being unfinished. Drafting is
+// never refused — taking something down has to work whatever state it is in.
+func (c *Courses) SetDrillStatus(ctx context.Context, labID int64, status string) error {
+	if status != domain.DrillDraft && status != domain.DrillPublished {
+		return domain.InvalidInput{Field: "status", Message: "trạng thái không hợp lệ"}
+	}
+	// Reading the lab first turns a bad id into a 404 rather than a write that
+	// silently matches no rows.
+	if _, err := c.repo.AdminLab(ctx, labID); err != nil {
+		return err
+	}
+	if status == domain.DrillPublished {
+		n, err := c.repo.ActiveIncidentCount(ctx, labID)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return domain.ErrNoActiveIncident
+		}
+	}
+	return c.repo.SetDrillStatus(ctx, labID, status)
+}
+
+func (c *Courses) AdminIncidents(ctx context.Context, labID int64) ([]domain.Incident, error) {
+	// Reading the lab first turns a bad id into a 404 rather than an empty list
+	// that reads as "this lab has no scenarios".
+	if _, err := c.repo.AdminLab(ctx, labID); err != nil {
+		return nil, err
+	}
+	return c.repo.AdminIncidents(ctx, labID)
+}
+
+func (c *Courses) CreateIncident(ctx context.Context, labID int64, in domain.IncidentInput) (*domain.Incident, error) {
+	clean, err := cleanIncident(in)
+	if err != nil {
+		return nil, err
+	}
+	return c.repo.CreateIncident(ctx, labID, clean)
+}
+
+func (c *Courses) UpdateIncident(ctx context.Context, incidentID int64, in domain.IncidentInput) (*domain.Incident, error) {
+	clean, err := cleanIncident(in)
+	if err != nil {
+		return nil, err
+	}
+	return c.repo.UpdateIncident(ctx, incidentID, clean)
+}
+
+func (c *Courses) DeleteIncident(ctx context.Context, incidentID int64) error {
+	return c.repo.DeleteIncident(ctx, incidentID)
+}
+
+// cleanIncident needs no repository: everything it checks is in the input. The
+// break script is bounded but not otherwise inspected — it is shell, and
+// guessing at valid shell here would refuse things that work.
+func cleanIncident(in domain.IncidentInput) (domain.IncidentInput, error) {
+	in.Title = strings.TrimSpace(in.Title)
+	in.BreakScript = strings.TrimSpace(in.BreakScript)
+	in.RevealMD = strings.TrimSpace(in.RevealMD)
+
+	switch {
+	case in.Title == "":
+		return in, domain.InvalidInput{Field: "title", Message: "tiêu đề không được để trống"}
+	case len(in.Title) > maxTitle:
+		return in, domain.InvalidInput{Field: "title", Message: "tiêu đề quá dài"}
+	case len(in.BreakScript) > maxBreakScript:
+		return in, domain.InvalidInput{Field: "break_script", Message: "script quá dài"}
+	case len(in.RevealMD) > maxDescriptionMD:
+		return in, domain.InvalidInput{Field: "reveal_md", Message: "nội dung quá dài"}
+	case in.RPS < 0 || in.RPS > maxRPS:
+		return in, domain.InvalidInput{Field: "rps", Message: "rps phải từ 0 đến 100000"}
+	}
+
+	// The one invariant worth enforcing: an active scenario with no script
+	// starts a drill in which nothing is broken, and the student hunts a fault
+	// that does not exist. Saving it retired is how a draft gets written.
+	if in.Active && in.BreakScript == "" {
+		return in, domain.InvalidInput{
+			Field:   "break_script",
+			Message: "kịch bản đang bật thì phải có script phá — hoặc tắt nó đi",
+		}
 	}
 	return in, nil
 }

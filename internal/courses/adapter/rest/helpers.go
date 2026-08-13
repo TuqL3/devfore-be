@@ -5,10 +5,14 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/devforge/be/internal/i18n"
 )
 
+// See the note on the auth package's copy: `msg` is both the Vietnamese
+// sentence and the key it is translated by.
 func abort(c *gin.Context, code int, msg string) {
-	c.AbortWithStatusJSON(code, gin.H{"error": msg})
+	c.AbortWithStatusJSON(code, gin.H{"error": i18n.Msg(c, msg)})
 }
 
 func serverError(c *gin.Context, err error) {

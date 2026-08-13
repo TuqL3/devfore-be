@@ -25,8 +25,15 @@ type adminLab struct {
 	// null on a container lab. Sent back as JSON rather than as a string so the
 	// form can pretty-print it without parsing a string that happens to be JSON.
 	SimScenario json.RawMessage `json:"sim_scenario"`
-	TaskCount   int             `json:"task_count"`
-	Points      int             `json:"points"`
+	// Shell that stands up the service a War Room scenario breaks. Admin-only,
+	// like lab_image_id and for a stronger reason: it describes the surface the
+	// fault is hidden in.
+	IncidentSetup string `json:"incident_setup"`
+	TaskCount     int    `json:"task_count"`
+	Points        int    `json:"points"`
+	// Active scenarios. Non-zero is the only thing that marks this lab a drill,
+	// so the list uses it to badge one.
+	IncidentCount int `json:"incident_count"`
 }
 
 func newAdminLab(l domain.Lab) adminLab {
@@ -39,8 +46,10 @@ func newAdminLab(l domain.Lab) adminLab {
 		OrderIdx:        l.OrderIdx,
 		LabImageID:      l.LabImageID,
 		SimScenario:     rawJSON(l.SimScenario),
+		IncidentSetup:   l.IncidentSetup,
 		TaskCount:       l.TaskCount,
 		Points:          l.Points,
+		IncidentCount:   l.IncidentCount,
 	}
 }
 
@@ -112,6 +121,7 @@ type labInput struct {
 	DurationMinutes int             `json:"duration_minutes"`
 	LabImageID      *int64          `json:"lab_image_id"`
 	SimScenario     json.RawMessage `json:"sim_scenario"`
+	IncidentSetup   string          `json:"incident_setup"`
 	OrderIdx        int             `json:"order_idx"`
 }
 
@@ -123,6 +133,7 @@ func (in labInput) toDomain() domain.LabInput {
 		DurationMinutes: in.DurationMinutes,
 		LabImageID:      in.LabImageID,
 		SimScenario:     in.SimScenario,
+		IncidentSetup:   in.IncidentSetup,
 		OrderIdx:        in.OrderIdx,
 	}
 }
@@ -398,4 +409,185 @@ func pathID(c *gin.Context, param string) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+// ── War Room scenarios ─────────────────────────────────────────────────────
+
+// adminIncident carries break_script. Along with adminTask.check_script and
+// adminTask.sim_goal it is one of the three responses in the codebase that
+// serialises an answer key, and it travels the same single route: behind the
+// admin role, never on anything a student can reach.
+type adminIncident struct {
+	ID          int64  `json:"id"`
+	Title       string `json:"title"`
+	BreakScript string `json:"break_script"`
+	RevealMD    string `json:"reveal_md"`
+	RPS         int    `json:"rps"`
+	Active      bool   `json:"active"`
+}
+
+func newAdminIncident(i domain.Incident) adminIncident {
+	return adminIncident{
+		ID:          i.ID,
+		Title:       i.Title,
+		BreakScript: i.BreakScript,
+		RevealMD:    i.RevealMD,
+		RPS:         i.RPS,
+		Active:      i.Active,
+	}
+}
+
+type incidentInput struct {
+	Title       string `json:"title"`
+	BreakScript string `json:"break_script"`
+	RevealMD    string `json:"reveal_md"`
+	RPS         int    `json:"rps"`
+	Active      bool   `json:"active"`
+}
+
+func (in incidentInput) toDomain() domain.IncidentInput {
+	return domain.IncidentInput{
+		Title:       in.Title,
+		BreakScript: in.BreakScript,
+		RevealMD:    in.RevealMD,
+		RPS:         in.RPS,
+		Active:      in.Active,
+	}
+}
+
+type adminDrill struct {
+	ID              int64  `json:"id"`
+	Slug            string `json:"slug"`
+	Title           string `json:"title"`
+	DurationMinutes int    `json:"duration_minutes"`
+	LabImageID      *int64 `json:"lab_image_id"`
+	IncidentSetup   string `json:"incident_setup"`
+	Status          string `json:"status"`
+	// null for a challenge that belongs to no course, which is every one made in
+	// War Room since 000028.
+	CourseID      *int64 `json:"course_id"`
+	CourseTitle   string `json:"course_title"`
+	IncidentCount int    `json:"incident_count"`
+	ScenarioCount int    `json:"scenario_count"`
+}
+
+func (h *Handler) AdminDrills(c *gin.Context) {
+	drills, err := h.uc.AdminDrills(c.Request.Context())
+	if writeCourseError(c, err) {
+		return
+	}
+	out := make([]adminDrill, len(drills))
+	for i, d := range drills {
+		out[i] = adminDrill{
+			ID:              d.ID,
+			Slug:            d.Slug,
+			Title:           d.Title,
+			DurationMinutes: d.DurationMinutes,
+			LabImageID:      d.LabImageID,
+			IncidentSetup:   d.IncidentSetup,
+			Status:          d.Status,
+			CourseID:        d.CourseID,
+			CourseTitle:     d.CourseTitle,
+			IncidentCount:   d.IncidentCount,
+			ScenarioCount:   d.ScenarioCount,
+		}
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+type drillStatusInput struct {
+	Status string `json:"status"`
+}
+
+// AdminCreateDrill makes a War Room challenge. Its own route rather than the
+// lab one, because a challenge has no course to be nested under — that is the
+// whole difference between the two.
+func (h *Handler) AdminCreateDrill(c *gin.Context) {
+	var in labInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		abort(c, http.StatusBadRequest, "dữ liệu không hợp lệ")
+		return
+	}
+	lab, err := h.uc.CreateDrill(c.Request.Context(), in.toDomain())
+	if writeCourseError(c, err) {
+		return
+	}
+	c.JSON(http.StatusCreated, newAdminLab(*lab))
+}
+
+func (h *Handler) AdminSetDrillStatus(c *gin.Context) {
+	id, ok := pathID(c, "labID")
+	if !ok {
+		return
+	}
+	var in drillStatusInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		abort(c, http.StatusBadRequest, "dữ liệu không hợp lệ")
+		return
+	}
+	if writeCourseError(c, h.uc.SetDrillStatus(c.Request.Context(), id, in.Status)) {
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (h *Handler) AdminIncidents(c *gin.Context) {
+	id, ok := pathID(c, "labID")
+	if !ok {
+		return
+	}
+	incidents, err := h.uc.AdminIncidents(c.Request.Context(), id)
+	if writeCourseError(c, err) {
+		return
+	}
+	out := make([]adminIncident, len(incidents))
+	for i, inc := range incidents {
+		out[i] = newAdminIncident(inc)
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (h *Handler) AdminCreateIncident(c *gin.Context) {
+	id, ok := pathID(c, "labID")
+	if !ok {
+		return
+	}
+	var in incidentInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		abort(c, http.StatusBadRequest, "dữ liệu không hợp lệ")
+		return
+	}
+	inc, err := h.uc.CreateIncident(c.Request.Context(), id, in.toDomain())
+	if writeCourseError(c, err) {
+		return
+	}
+	c.JSON(http.StatusCreated, newAdminIncident(*inc))
+}
+
+func (h *Handler) AdminUpdateIncident(c *gin.Context) {
+	id, ok := pathID(c, "incidentID")
+	if !ok {
+		return
+	}
+	var in incidentInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		abort(c, http.StatusBadRequest, "dữ liệu không hợp lệ")
+		return
+	}
+	inc, err := h.uc.UpdateIncident(c.Request.Context(), id, in.toDomain())
+	if writeCourseError(c, err) {
+		return
+	}
+	c.JSON(http.StatusOK, newAdminIncident(*inc))
+}
+
+func (h *Handler) AdminDeleteIncident(c *gin.Context) {
+	id, ok := pathID(c, "incidentID")
+	if !ok {
+		return
+	}
+	if writeCourseError(c, h.uc.DeleteIncident(c.Request.Context(), id)) {
+		return
+	}
+	c.Status(http.StatusNoContent)
 }

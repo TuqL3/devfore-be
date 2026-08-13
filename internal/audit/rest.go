@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/devforge/be/internal/i18n"
 )
 
 type logRow struct {
@@ -40,7 +42,8 @@ func (r *Recorder) list(c *gin.Context) {
 	})
 	if err != nil {
 		slog.Error("audit list", "err", err)
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "lỗi máy chủ"})
+		c.AbortWithStatusJSON(http.StatusInternalServerError,
+			gin.H{"error": i18n.Msg(c, "lỗi máy chủ")})
 		return
 	}
 	rows := make([]logRow, len(page.Logs))

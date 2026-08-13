@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/devforge/be/internal/courses/domain"
+	"github.com/devforge/be/internal/i18n"
 )
 
 // courseInput is the admin form. image_url is a pointer so "field absent" and
@@ -107,7 +108,7 @@ func writeCourseError(c *gin.Context, err error) bool {
 		return false
 	case errors.As(err, &invalid):
 		c.AbortWithStatusJSON(http.StatusUnprocessableEntity, gin.H{
-			"error": invalid.Message,
+			"error": i18n.Msg(c, invalid.Message),
 			// The form highlights the offending input rather than making the
 			// admin guess which of six fields the message is about.
 			"field": invalid.Field,
@@ -126,6 +127,18 @@ func writeCourseError(c *gin.Context, err error) bool {
 		abort(c, http.StatusNotFound, "nhiệm vụ không tồn tại")
 	case errors.Is(err, domain.ErrReviewNotFound):
 		abort(c, http.StatusNotFound, "bài ôn tập không tồn tại")
+	case errors.Is(err, domain.ErrIncidentNotFound):
+		abort(c, http.StatusNotFound, "kịch bản sự cố không tồn tại")
+	case errors.Is(err, domain.ErrNoActiveIncident):
+		// 409: the request is well formed, the challenge simply has nothing to
+		// draw yet. The message names what to do about it.
+		abort(c, http.StatusConflict,
+			"chưa có kịch bản nào đang bật — bật một cái rồi mới đăng được")
+	case errors.Is(err, domain.ErrIncidentPlayed):
+		// 409, not 403: nothing is wrong with the request, the row simply has
+		// history behind it. The message names the way out.
+		abort(c, http.StatusConflict,
+			"kịch bản này đã có người chơi — hãy tắt nó thay vì xoá")
 	default:
 		serverError(c, err)
 	}

@@ -33,7 +33,9 @@ func (r *GradeRepo) History(ctx context.Context, userID int64) ([]domain.History
 		        (SELECT count(*) FROM lab_tasks t WHERE t.lab_id = l.id) AS total
 		   FROM lab_sessions s
 		   JOIN labs l   ON l.id = s.lab_id
-		   JOIN courses c ON c.id = l.course_id
+		   -- LEFT: a War Room challenge has no course, and an inner join would
+		   -- drop every drill out of the history list.
+		   LEFT JOIN courses c ON c.id = l.course_id
 		  WHERE s.user_id = ?
 		  ORDER BY s.started_at DESC`, userID,
 	).Scan(&rows).Error
@@ -73,11 +75,12 @@ func (r *GradeRepo) Report(ctx context.Context, sessionID string) (*domain.Repor
 		LabID       int64
 	}
 	res := r.db.WithContext(ctx).Raw(
-		`SELECT l.title AS lab_title, l.slug AS lab_slug, c.slug AS course_slug,
+		`SELECT l.title AS lab_title, l.slug AS lab_slug,
+		        COALESCE(c.slug, '') AS course_slug,
 		        s.status, s.started_at, s.ended_at, s.submitted_at, l.id AS lab_id
 		   FROM lab_sessions s
 		   JOIN labs l    ON l.id = s.lab_id
-		   JOIN courses c ON c.id = l.course_id
+		   LEFT JOIN courses c ON c.id = l.course_id
 		  WHERE s.id = ?`, sessionID,
 	).Scan(&head)
 	if res.Error != nil {

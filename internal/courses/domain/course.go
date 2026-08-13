@@ -73,11 +73,26 @@ type Lab struct {
 	// answer without carrying every scenario on it: the screen before Start has
 	// to stop promising a container that a sim lab never creates.
 	IsSim bool
+	// Builds the service a War Room scenario then breaks. An authoring detail and
+	// a hint at the fault surface, so only the admin query selects it — the same
+	// arrangement LabImageID has.
+	IncidentSetup string
+	// Active scenarios on this lab. Non-zero is what makes the lab a drill, so
+	// this is the only thing on an admin screen that tells the two kinds apart.
+	// Admin query only.
+	IncidentCount int
 	// Filled by a second query, never by a scan. Without the tag gorm reads the
 	// slice as a relation and fails every query that scans a Lab, including the
 	// course detail one that does not want tasks at all.
 	Tasks []Task `gorm:"-"`
 }
+
+// A War Room challenge is offered to students or it is not, using the same two
+// words courses already use for the same idea.
+const (
+	DrillDraft     = "draft"
+	DrillPublished = "published"
+)
 
 // Task kinds. A script task is graded by running a shell command in the
 // student's container; a choice task by comparing what they ticked.
@@ -157,6 +172,10 @@ type LabInput struct {
 	// empty object, because NULL is what every other query reads to tell the two
 	// kinds of lab apart.
 	SimScenario []byte
+	// Shell that stands the service up before a scenario breaks it. On the lab
+	// rather than on each scenario: every scenario of one lab breaks the same
+	// service, and three copies would be three places for it to drift.
+	IncidentSetup string
 }
 
 type TaskInput struct {

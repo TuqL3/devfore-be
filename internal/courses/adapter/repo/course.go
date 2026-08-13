@@ -165,7 +165,8 @@ func (r *CourseRepo) Drills(ctx context.Context) ([]domain.Lab, error) {
 			(SELECT count(*) FROM lab_tasks t WHERE t.lab_id = l.id)               AS task_count,
 			COALESCE((SELECT sum(points) FROM lab_tasks t WHERE t.lab_id = l.id), 0) AS points
 		   FROM labs l
-		  WHERE EXISTS (SELECT 1 FROM lab_incidents i WHERE i.lab_id = l.id AND i.active)
+		  WHERE l.drill_status = 'published'
+		    AND EXISTS (SELECT 1 FROM lab_incidents i WHERE i.lab_id = l.id AND i.active)
 		  ORDER BY l.order_idx, l.id`,
 	).Scan(&labs).Error
 	return labs, err
@@ -184,6 +185,7 @@ func (r *CourseRepo) DrillBySlug(ctx context.Context, slug string) (*domain.Lab,
 			COALESCE((SELECT sum(points) FROM lab_tasks t WHERE t.lab_id = l.id), 0) AS points
 		   FROM labs l
 		  WHERE l.slug = ?
+		    AND l.drill_status = 'published'
 		    AND EXISTS (SELECT 1 FROM lab_incidents i WHERE i.lab_id = l.id AND i.active)`,
 		slug,
 	).Scan(&lab)

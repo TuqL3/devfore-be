@@ -58,6 +58,20 @@ func (m *Module) Routes(api *gin.RouterGroup, required, optional, admin gin.Hand
 	adm.PUT("/reviews/:reviewID", h.AdminUpdateReview)
 	adm.DELETE("/reviews/:reviewID", h.AdminDeleteReview)
 
+	// War Room scenarios. Nested under their lab on the way in and addressed by
+	// their own id afterwards, exactly as tasks are — a scenario belongs to one
+	// lab and a path that repeats which is a path that can disagree with itself.
+	// The War Room admin list, addressed on its own rather than under a course:
+	// a drill lives in a course only because labs.course_id is NOT NULL, and
+	// making an author remember which one would be the same as not listing them.
+	adm.GET("/war-room", h.AdminDrills)
+	adm.POST("/war-room", h.AdminCreateDrill)
+	adm.PUT("/labs/:labID/drill-status", h.AdminSetDrillStatus)
+	adm.GET("/labs/:labID/incidents", h.AdminIncidents)
+	adm.POST("/labs/:labID/incidents", h.AdminCreateIncident)
+	adm.PUT("/incidents/:incidentID", h.AdminUpdateIncident)
+	adm.DELETE("/incidents/:incidentID", h.AdminDeleteIncident)
+
 	// The caller's own enrolments. Outside the /courses group because it is
 	// addressed by who is asking, not by which course.
 	api.GET("/me/courses", required, h.MyCourses)
