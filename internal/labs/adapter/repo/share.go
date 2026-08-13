@@ -10,7 +10,7 @@ import (
 // recoveredSQL is the one definition of "the service came back", written once
 // and joined into both queries below.
 //
-// It has to agree with usecase.recoveredAt, which decides the same thing in Go
+// It has to agree with usecase.RecoveredAt, which decides the same thing in Go
 // for the private report: every task of the lab has a passing answer, and the
 // recovery is dated from the last of them. Two definitions of recovered would
 // eventually disagree, and the shape of the disagreement is a leaderboard that

@@ -63,6 +63,10 @@ var (
 	// client as an empty day rather than as a failure — a platform with no
 	// scenarios yet is a stage of a project, not a bug.
 	ErrNoDailyDrill = errors.New("no published drill scenario")
+	// Every container seat on the host is taken. A capacity answer, not a fault:
+	// the platform is up, it is full, and the person asking should be told to
+	// come back in a few minutes rather than shown a docker error.
+	ErrAtCapacity = errors.New("no free container capacity")
 	// The daily budget for AI-generated scenarios is spent. Every generation is
 	// a paid call against a real account, so this is a cost control before it is
 	// anything else — and it is reported to the person rather than logged,

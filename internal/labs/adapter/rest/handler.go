@@ -18,9 +18,16 @@ import (
 type Handler struct {
 	uc    *usecase.Labs
 	audit *audit.Recorder
+	// Absolute origins, needed by the one endpoint a crawler reads: a preview
+	// card cannot carry a relative image URL, and the canonical link has to point
+	// at the app rather than at the API.
+	publicURL   string
+	frontendURL string
 }
 
-func NewHandler(uc *usecase.Labs) *Handler { return &Handler{uc: uc} }
+func NewHandler(uc *usecase.Labs, publicURL, frontendURL string) *Handler {
+	return &Handler{uc: uc, publicURL: publicURL, frontendURL: frontendURL}
+}
 
 // SetAudit hands the handler the recorder for the one endpoint that ends
 // somebody else's work. Set after construction so labs and audit stay
@@ -107,6 +114,12 @@ func (h *Handler) Start(c *gin.Context) {
 		abort(c, http.StatusConflict, "bạn đang có một phiên lab chạy dở, hãy đóng nó trước")
 	case errors.Is(err, domain.ErrNotEnrolled):
 		abort(c, http.StatusForbidden, "bạn cần đăng ký khoá học này trước khi làm lab")
+	case errors.Is(err, domain.ErrAtCapacity):
+		// 503, not 500: the platform is working and it is full. The number of
+		// people inside is not something to tell a stranger, so the sentence says
+		// what to do instead of how full it is.
+		abort(c, http.StatusServiceUnavailable,
+			"máy chủ đang kín chỗ, thử lại sau vài phút")
 	case err != nil:
 		serverError(c, err)
 	default:

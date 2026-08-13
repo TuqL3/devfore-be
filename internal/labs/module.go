@@ -12,6 +12,7 @@ import (
 	"github.com/devforge/be/internal/labs/adapter/dockerx"
 	"github.com/devforge/be/internal/labs/adapter/openrouter"
 	"github.com/devforge/be/internal/labs/adapter/quota"
+	"github.com/devforge/be/internal/labs/adapter/ratelimit"
 	"github.com/devforge/be/internal/labs/adapter/repo"
 	"github.com/devforge/be/internal/labs/adapter/rest"
 	"github.com/devforge/be/internal/labs/usecase"
@@ -27,16 +28,29 @@ type Config struct {
 	// requirement.
 	OpenRouterKey   string
 	OpenRouterModel string
-	// Sent to OpenRouter for traffic attribution. Not auth, not required.
+	// Sent to OpenRouter for traffic attribution, and the origin the preview
+	// card's image URL is built from — a crawler needs an absolute one.
 	PublicURL string
+	// Where the browser-facing app lives. The preview page redirects a human to
+	// it, and tells crawlers this is the canonical address of the report.
+	FrontendURL string
 	// Generations allowed per user per day. Every one of them is a paid call, so
 	// this is a cost ceiling, not a fairness knob.
 	AIDailyLimit int
+	// Requests a minute, per address, on the routes that answer without an
+	// account. Zero switches the cap off — which is what the tests and a local
+	// run want, and what production must never have.
+	PublicRateLimit int
+	// Lab containers allowed on the host at once. Zero takes the default.
+	MaxContainers int
 }
 
 type Module struct {
-	handler  *rest.Handler
-	terminal *rest.Terminal
+	handler *rest.Handler
+	// Guards the two routes with no caller behind them. Nil-safe: switched off,
+	// its middleware is a pass-through.
+	publicLimit *ratelimit.Redis
+	terminal    *rest.Terminal
 	// The simulator offered as a tool rather than as a lesson. It lives in this
 	// module because it runs the same engine, and nowhere near the rest of it
 	// because it touches no session, no container and no mark.
@@ -63,12 +77,13 @@ func New(ctx context.Context, db *gorm.DB, rdb *redis.Client, cfg Config) (*Modu
 
 	uc := usecase.NewLabs(
 		repo.NewSessionRepo(db), repo.NewGradeRepo(db), repo.NewSimRepo(db),
-		rt, cfg.SessionTTL,
+		rt, cfg.SessionTTL, cfg.MaxContainers,
 	)
 	return &Module{
-		handler:    rest.NewHandler(uc),
-		terminal:   rest.NewTerminal(uc, cfg.AllowedOrigins),
-		playground: rest.NewPlayground(usecase.NewPlayground()),
+		publicLimit: ratelimit.New(rdb, cfg.PublicRateLimit, time.Minute, "rl:public"),
+		handler:     rest.NewHandler(uc, cfg.PublicURL, cfg.FrontendURL),
+		terminal:    rest.NewTerminal(uc, cfg.AllowedOrigins),
+		playground:  rest.NewPlayground(usecase.NewPlayground()),
 		simgen: rest.NewSimgen(simgen.New(
 			openrouter.New(cfg.OpenRouterKey, cfg.OpenRouterModel, cfg.PublicURL),
 			quota.New(rdb, cfg.AIDailyLimit),
@@ -155,8 +170,13 @@ func (m *Module) Routes(r *gin.Engine, api *gin.RouterGroup, required, admin gin
 	// which the courses module owns and where `:slug` already sits — a static
 	// segment beside an existing wildcard is a route conflict waiting for a
 	// deploy to find it.
-	api.GET("/shared-drills/:token", h.SharedDrill)
-	api.GET("/daily-drill", h.Daily)
+	limit := m.publicLimit.Middleware()
+	api.GET("/shared-drills/:token", limit, h.SharedDrill)
+	api.GET("/daily-drill", limit, h.Daily)
+	// The two a crawler reads. Same token, same 404 once it is taken down, so an
+	// unpublished report stops having a picture as well as a page.
+	api.GET("/shared-drills/:token/preview", limit, h.SharedDrillPreview)
+	api.GET("/shared-drills/:token/og.png", limit, h.SharedDrillOG)
 
 	// Outside /api because it is not one: the client opens it with a WebSocket
 	// handshake, and the cookie the middleware reads rides along with it.

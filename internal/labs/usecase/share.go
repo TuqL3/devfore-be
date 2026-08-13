@@ -39,6 +39,15 @@ func DailyIndex(day time.Time, n int) int {
 	return int(h.Sum32() % uint32(n))
 }
 
+// dailyTTL is how stale the day's board may be.
+//
+// The two routes with no account behind them are the ones a link drops a crowd
+// onto, and this one runs two queries per request. Fifteen seconds bounds that
+// at two queries per fifteen seconds however many people arrive, and is short
+// enough that somebody who just handed in finds themselves on the board while
+// still looking at it.
+const dailyTTL = 15 * time.Second
+
 // Daily is the drill everybody gets today, and how everybody has done on it.
 //
 // The pick is made from the full list of published scenarios each call, not
@@ -47,6 +56,9 @@ func DailyIndex(day time.Time, n int) int {
 // real and worth naming: publishing or retiring a scenario mid-day reshuffles the
 // list, so today's pick can change under people who already played it.
 func (l *Labs) Daily(ctx context.Context, now time.Time) (*domain.DailyDrill, error) {
+	if hit := l.cachedDaily(now); hit != nil {
+		return hit, nil
+	}
 	all, err := l.repo.DrillScenarios(ctx)
 	if err != nil {
 		return nil, err
@@ -69,13 +81,43 @@ func (l *Labs) Daily(ctx context.Context, now time.Time) (*domain.DailyDrill, er
 		leaders[i].RequestsFailed = RequestsFailed(
 			time.Duration(leaders[i].DowntimeSeconds)*time.Second, pick.RPS)
 	}
-	return &domain.DailyDrill{
+	out := &domain.DailyDrill{
 		Day:        midnight.Format(time.DateOnly),
 		LabSlug:    pick.LabSlug,
 		LabTitle:   pick.LabTitle,
 		IncidentID: pick.IncidentID,
 		Leaders:    leaders,
-	}, nil
+	}
+	l.storeDaily(now, out)
+	return out, nil
+}
+
+// cachedDaily answers the last board if it is still fresh and still about today.
+//
+// The day is part of the check, not just the age: a board cached at 23:59:58
+// describes yesterday's scenario, and serving it for another thirteen seconds
+// would hand two people two different challenges across the rollover.
+//
+// A copy goes out, not the cached pointer. Handing callers the shared slice
+// means the first one to sort or append it edits what everybody else reads.
+func (l *Labs) cachedDaily(now time.Time) *domain.DailyDrill {
+	l.dailyMu.RLock()
+	defer l.dailyMu.RUnlock()
+	if l.daily == nil || now.Sub(l.dailyAt) > dailyTTL {
+		return nil
+	}
+	if l.daily.Day != now.UTC().Format(time.DateOnly) {
+		return nil
+	}
+	out := *l.daily
+	out.Leaders = append([]domain.DrillLeader(nil), l.daily.Leaders...)
+	return &out
+}
+
+func (l *Labs) storeDaily(now time.Time, d *domain.DailyDrill) {
+	l.dailyMu.Lock()
+	defer l.dailyMu.Unlock()
+	l.daily, l.dailyAt = d, now
 }
 
 // Share publishes the caller's own finished drill and answers with its link

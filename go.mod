@@ -12,7 +12,9 @@ require (
 	github.com/jackc/pgx/v5 v5.6.0
 	github.com/redis/go-redis/v9 v9.21.0
 	golang.org/x/crypto v0.54.0
+	golang.org/x/image v0.45.0
 	golang.org/x/oauth2 v0.36.0
+	golang.org/x/text v0.41.0
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.2
 	rsc.io/qr v0.2.0
@@ -76,7 +78,6 @@ require (
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gotest.tools/v3 v3.5.2 // indirect

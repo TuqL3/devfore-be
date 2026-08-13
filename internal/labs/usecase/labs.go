@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -30,19 +32,44 @@ const checkTimeout = 10 * time.Second
 // a client bug nobody would notice. A chosen number, not a measured one.
 const MaxSimRuns = 30
 
+// MaxContainers is how many lab containers the host will hold at once, when the
+// caller does not set one.
+//
+// A ceiling on the machine, not on fairness — the one-session-per-user index
+// already handles fairness. Without it, a link that goes round on a Monday
+// morning is answered by docker running out of memory, which arrives as a failed
+// start for everybody including the students already inside.
+const MaxContainers = 40
+
 type Labs struct {
+	// The day's board, kept for a few seconds. Its own lock rather than one
+	// around the whole struct: everything else here is stateless, and a mutex on
+	// the type would start guarding things that never needed guarding.
+	dailyMu sync.RWMutex
+	daily   *domain.DailyDrill
+	dailyAt time.Time
+
 	repo    *repo.SessionRepo
 	grades  *repo.GradeRepo
 	sims    *repo.SimRepo
 	runtime *dockerx.Runtime
 	ttl     time.Duration
+	// Ceiling on containers alive at once. Zero means the default; negative
+	// switches the check off, which is what a test that never starts one wants.
+	maxContainers int
 }
 
 func NewLabs(
 	r *repo.SessionRepo, g *repo.GradeRepo, s *repo.SimRepo,
-	rt *dockerx.Runtime, ttl time.Duration,
+	rt *dockerx.Runtime, ttl time.Duration, maxContainers int,
 ) *Labs {
-	return &Labs{repo: r, grades: g, sims: s, runtime: rt, ttl: ttl}
+	if maxContainers == 0 {
+		maxContainers = MaxContainers
+	}
+	return &Labs{
+		repo: r, grades: g, sims: s, runtime: rt, ttl: ttl,
+		maxContainers: maxContainers,
+	}
 }
 
 type StartOutput struct {
@@ -108,6 +135,16 @@ func (l *Labs) Start(
 		return StartOutput{Session: s, Spec: spec}, nil
 	}
 
+	// The ceiling is checked here rather than at the top: everything above this
+	// line is free, and a sim lab must not be refused because the container labs
+	// are full. Counted, not reserved — two starts landing in the same instant can
+	// both pass and put the host one over. That is a seat, not an outage, and the
+	// alternative is a lock held across a docker call.
+	if err := l.capacity(ctx); err != nil {
+		_, _ = l.repo.End(context.WithoutCancel(ctx), id, domain.StatusEnded)
+		return StartOutput{}, err
+	}
+
 	containerID, err := l.runtime.Create(ctx, id, spec.Image)
 	if err != nil {
 		// The row is holding the user's only slot for a container that does not
@@ -131,6 +168,27 @@ func (l *Labs) Start(
 		return StartOutput{}, err
 	}
 	return StartOutput{Session: s, Spec: spec}, nil
+}
+
+// capacity refuses a start when every container seat is taken.
+//
+// A failure to count opens the gate rather than closing it: the count is a guard
+// against a crowd, and a database blip that stops one student starting a lab is
+// a worse outcome than one container over the line.
+func (l *Labs) capacity(ctx context.Context) error {
+	if l.maxContainers < 0 {
+		return nil
+	}
+	n, err := l.repo.CountRunningContainers(ctx)
+	if err != nil {
+		slog.Error("count running containers", "err", err)
+		return nil
+	}
+	if n >= l.maxContainers {
+		slog.Warn("container capacity reached", "running", n, "max", l.maxContainers)
+		return domain.ErrAtCapacity
+	}
+	return nil
 }
 
 // Owned is the guard every session route goes through. Sessions are addressed by

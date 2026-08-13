@@ -156,7 +156,7 @@ func (l *Labs) attachIncident(ctx context.Context, s *domain.Session, rep *domai
 		Title:       inc.Title,
 		RevealMD:    inc.RevealMD,
 		RPS:         inc.RPS,
-		RecoveredAt: recoveredAt(rep),
+		RecoveredAt: RecoveredAt(rep),
 		Timeline:    ParseTimeline(log),
 	}
 	if out.RecoveredAt != nil {
@@ -167,14 +167,20 @@ func (l *Labs) attachIncident(ctx context.Context, s *domain.Session, rep *domai
 	rep.Incident = out
 }
 
-// recoveredAt is when the student declared the service healthy: the moment the
+// RecoveredAt is when the student declared the service healthy: the moment the
 // last of the lab's tasks went green.
+//
+// Exported because it is not the only place this rule is written down: the
+// leaderboard and the public page decide the same thing in SQL, in
+// repo.recoveredSQL. Two definitions of "recovered" that drift apart produce a
+// board listing somebody the report screen says never fixed it — so the two are
+// held against each other by a test, and a test needs to be able to call this.
 //
 // The last rather than the first, because a lab may ask for more than the service
 // being up, and an outage is not over while any part of the ask is still failing.
 // Nil unless every task passed — a drill that ran out of time has no recovery, and
 // dating one from a partial pass would be the report inventing a moment.
-func recoveredAt(rep *domain.Report) *time.Time {
+func RecoveredAt(rep *domain.Report) *time.Time {
 	var last *time.Time
 	for _, a := range rep.Answers {
 		if a.Passed == nil || !*a.Passed || a.AnsweredAt == nil {

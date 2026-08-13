@@ -97,7 +97,10 @@ func run() error {
 		OpenRouterKey:   cfg.OpenRouterKey,
 		OpenRouterModel: cfg.OpenRouterModel,
 		PublicURL:       cfg.PublicURL,
+		FrontendURL:     cfg.FrontendURL,
 		AIDailyLimit:    cfg.AIDailyLimit,
+		PublicRateLimit: cfg.PublicRateLimit,
+		MaxContainers:   cfg.MaxContainers,
 	})
 	if err != nil {
 		return err
