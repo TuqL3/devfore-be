@@ -46,8 +46,22 @@ func drillDeadline(spec *domain.Spec, ttl time.Duration) time.Duration {
 // a student must never be dropped into a drill that half-broke, because the
 // evidence they are about to reason from would be a mix of the author's fault and
 // a failure nobody intended.
-func (l *Labs) applyIncident(ctx context.Context, s *domain.Session, spec *domain.Spec) error {
-	inc, err := l.repo.PickIncident(ctx, spec.LabID)
+//
+// `want` names a scenario instead of drawing one, which is what a shared link and
+// the daily drill both arrive with. Zero means draw. A named scenario that is not
+// a live one of this lab is refused rather than replaced by a draw: the promise a
+// shared link makes is that it hands you the same fault, and quietly handing over
+// a different one would break that promise without ever saying so.
+func (l *Labs) applyIncident(
+	ctx context.Context, s *domain.Session, spec *domain.Spec, want int64,
+) error {
+	var inc *domain.Incident
+	var err error
+	if want > 0 {
+		inc, err = l.repo.IncidentForLab(ctx, spec.LabID, want)
+	} else {
+		inc, err = l.repo.PickIncident(ctx, spec.LabID)
+	}
 	if errors.Is(err, domain.ErrNoIncident) {
 		return nil
 	}

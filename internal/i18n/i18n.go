@@ -201,4 +201,8 @@ var en = map[string]string{
 	"rps phải từ 0 đến 100000":                                      "rps must be between 0 and 100000",
 	"chưa có kịch bản nào đang bật — bật một cái rồi mới đăng được": "no scenario is active yet — turn one on before publishing",
 	"thử thách phải có script dựng dịch vụ":                         "a challenge needs a service setup script",
+	"báo cáo này không còn được chia sẻ":                            "this report is no longer shared",
+	"chưa có ca trực nào được xuất bản":                             "no on-call drill has been published yet",
+	"chỉ ca trực mới có báo cáo chia sẻ được":                       "only an on-call drill has a report that can be shared",
+	"kịch bản sự cố này không còn dùng được":                        "this incident scenario is no longer available",
 }

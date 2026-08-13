@@ -53,7 +53,14 @@ type StartOutput struct {
 // Start claims the user's single session slot in the database before it asks
 // docker for anything. Doing it the other way round would leave a container
 // running with no row to reap it by if the insert then lost the race.
-func (l *Labs) Start(ctx context.Context, userID int64, labSlug string) (StartOutput, error) {
+//
+// `incidentID` asks for one named fault instead of a random draw — that is how a
+// shared report and the daily drill hand somebody the same scenario. Zero is the
+// ordinary case and means draw. It reaches applyIncident, which checks the id
+// belongs to this lab before anything is broken.
+func (l *Labs) Start(
+	ctx context.Context, userID int64, labSlug string, incidentID int64,
+) (StartOutput, error) {
 	spec, err := l.repo.SpecBySlug(ctx, labSlug)
 	if err != nil {
 		return StartOutput{}, err
@@ -118,7 +125,7 @@ func (l *Labs) Start(ctx context.Context, userID int64, labSlug string) (StartOu
 	// The fault goes in last, once there is a container to put it in. A failure
 	// here is treated like a container that would not start: take it all back
 	// rather than hand somebody a drill that broke halfway through being set up.
-	if err := l.applyIncident(ctx, s, spec); err != nil {
+	if err := l.applyIncident(ctx, s, spec, incidentID); err != nil {
 		_ = l.runtime.Remove(context.WithoutCancel(ctx), containerID)
 		_, _ = l.repo.End(context.WithoutCancel(ctx), id, domain.StatusEnded)
 		return StartOutput{}, err

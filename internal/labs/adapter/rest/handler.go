@@ -91,11 +91,18 @@ func newSessionResponse(s *domain.Session) sessionResponse {
 	}
 }
 
+// Start opens a session. `?incident=` names one fault instead of drawing one,
+// which is how a shared report and the daily drill hand somebody the same
+// scenario. A query parameter rather than a body: this route has never had one,
+// and the value is a single number arriving in a link.
 func (h *Handler) Start(c *gin.Context) {
-	out, err := h.uc.Start(c.Request.Context(), userID(c), c.Param("slug"))
+	incidentID, _ := strconv.ParseInt(c.Query("incident"), 10, 64)
+	out, err := h.uc.Start(c.Request.Context(), userID(c), c.Param("slug"), incidentID)
 	switch {
 	case errors.Is(err, domain.ErrLabNotFound):
 		abort(c, http.StatusNotFound, "bài lab không tồn tại")
+	case errors.Is(err, domain.ErrIncidentNotInLab):
+		abort(c, http.StatusNotFound, "kịch bản sự cố này không còn dùng được")
 	case errors.Is(err, domain.ErrAlreadyRunning):
 		abort(c, http.StatusConflict, "bạn đang có một phiên lab chạy dở, hãy đóng nó trước")
 	case errors.Is(err, domain.ErrNotEnrolled):

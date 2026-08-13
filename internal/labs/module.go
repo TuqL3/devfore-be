@@ -118,6 +118,11 @@ func (m *Module) Routes(r *gin.Engine, api *gin.RouterGroup, required, admin gin
 	// readable afterwards, however the session ended.
 	api.POST("/lab-sessions/:id/submit", required, h.Submit)
 	api.GET("/lab-sessions/:id/report", required, h.Report)
+	// Publishing a drill report, and taking it back down. Behind the owner's own
+	// session like every route above it: what goes public is decided by the
+	// person it describes.
+	api.POST("/lab-sessions/:id/share", required, h.Share)
+	api.DELETE("/lab-sessions/:id/share", required, h.Unshare)
 	// Grading is scoped to a session because a check script only means anything
 	// against the container that session owns.
 	api.POST("/lab-sessions/:id/tasks/:taskID/check", required, h.Check)
@@ -137,6 +142,21 @@ func (m *Module) Routes(r *gin.Engine, api *gin.RouterGroup, required, admin gin
 	// place in the tree as Preview because it is the same tool: it produces
 	// something the playground runs, and nothing a lab is graded on.
 	api.POST("/sim/generate", required, m.simgen.Generate)
+
+	// The two public reads, with no `required` in front of them.
+	//
+	// A shared report has to open for somebody who has never signed in — that is
+	// the whole point of a link you can paste — and the day's challenge sits on
+	// the same page, so asking a stranger to sign in just to see what today's
+	// scenario is loses them at the door. Neither one can be steered: one takes a
+	// token that has to have been minted, the other takes nothing at all.
+	//
+	// `/shared-drills` and `/daily-drill` rather than hanging off `/war-room`,
+	// which the courses module owns and where `:slug` already sits — a static
+	// segment beside an existing wildcard is a route conflict waiting for a
+	// deploy to find it.
+	api.GET("/shared-drills/:token", h.SharedDrill)
+	api.GET("/daily-drill", h.Daily)
 
 	// Outside /api because it is not one: the client opens it with a WebSocket
 	// handshake, and the cookie the middleware reads rides along with it.

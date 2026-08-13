@@ -206,9 +206,17 @@ GET    /api/courses/:slug/status       → tab Trạng thái
 
 GET    /api/labs/:slug
 POST   /api/labs/:slug/start           → tạo container, trả sessionID + expires_at
+                                         ?incident=<id> xin đúng 1 kịch bản thay vì bốc ngẫu nhiên
 POST   /api/sessions/:id/check         → chấm tạm, chạy nhiều lần
 POST   /api/sessions/:id/submit        → chấm cuối, đóng session, xoá container
 GET    /api/history                    → lịch sử làm bài user hiện tại
+
+POST   /api/lab-sessions/:id/share     → đăng báo cáo ca trực công khai, trả token
+DELETE /api/lab-sessions/:id/share     → gỡ xuống, link cũ chết hẳn
+
+# Hai route KHÔNG cần đăng nhập — link chia sẻ phải mở được cho người lạ
+GET    /api/shared-drills/:token       → số liệu + tên sự cố. Không timeline, không lời giải
+GET    /api/daily-drill                → ca trực hôm nay (chọn từ ngày, UTC) + bảng xếp hạng ngày
 
 WS     /ws/terminal/:sessionID
 WS     /ws/chat
