@@ -205,6 +205,7 @@ var en = map[string]string{
 	"chưa có ca trực nào được xuất bản":                             "no on-call drill has been published yet",
 	"chỉ ca trực mới có báo cáo chia sẻ được":                       "only an on-call drill has a report that can be shared",
 	"kịch bản sự cố này không còn dùng được":                        "this incident scenario is no longer available",
+	"ngày không hợp lệ":                                             "invalid date",
 	"quá nhiều yêu cầu, thử lại sau ít giây":                        "too many requests, try again in a few seconds",
 	"máy chủ đang kín chỗ, thử lại sau vài phút":                    "the server is at capacity, try again in a few minutes",
 }

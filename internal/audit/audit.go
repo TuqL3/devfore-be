@@ -22,8 +22,11 @@ const (
 	ActionRoleGrant   = "user.role_grant"
 	ActionRoleRevoke  = "user.role_revoke"
 	ActionSessionKill = "lab_session.kill"
-	ActionTOTPEnable  = "auth.totp_enable"
-	ActionTOTPDisable = "auth.totp_disable"
+	// Gỡ một báo cáo ai đó đã đăng công khai. Ghi lại vì nó là hành động lên nội
+	// dung của người khác — thứ luôn phải có dấu vết ai làm, lúc nào.
+	ActionDrillUnshare = "drill.unshare"
+	ActionTOTPEnable   = "auth.totp_enable"
+	ActionTOTPDisable  = "auth.totp_disable"
 )
 
 const (

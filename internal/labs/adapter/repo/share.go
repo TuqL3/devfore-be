@@ -67,6 +67,27 @@ func (r *SessionRepo) ShareToken(ctx context.Context, sessionID string) (string,
 	return *token, nil
 }
 
+// ClearShareToken takes a page down by its token and answers which session it
+// was, so the action can be recorded against something.
+//
+// Addressed by token rather than by session id because that is what a report
+// arrives as: somebody sends a moderator a link, and asking them to find the
+// session behind it first is asking them not to bother.
+func (r *SessionRepo) ClearShareToken(ctx context.Context, token string) (string, error) {
+	var id string
+	res := r.db.WithContext(ctx).Raw(
+		`UPDATE lab_sessions SET share_token = NULL
+		  WHERE share_token = ? RETURNING id`, token,
+	).Scan(&id)
+	if res.Error != nil {
+		return "", res.Error
+	}
+	if res.RowsAffected == 0 {
+		return "", domain.ErrNotFound
+	}
+	return id, nil
+}
+
 // SharedByToken is the public page's only query, and the only place in the
 // codebase that answers without a caller identity.
 //
@@ -150,6 +171,10 @@ func (r *SessionRepo) DrillScenarios(ctx context.Context) ([]domain.DrillScenari
 
 // DailyLeaders ranks the recoveries against one scenario since a moment.
 //
+// Bounded at both ends, not just the start. An archived day asked with only a
+// lower bound would answer with every recovery since — so yesterday's board
+// would fill up with today's runs, and the older the page the more wrong it got.
+//
 // Only sessions that recovered are on the board — a drill that ran out of time
 // has no time to rank, and putting it last under a made-up number would be the
 // board inventing a result. Ties break on who started earlier, so the order is
@@ -160,7 +185,7 @@ func (r *SessionRepo) DrillScenarios(ctx context.Context) ([]domain.DrillScenari
 // every row with the scenario's own rate — one definition of the cost, not one
 // here and one there.
 func (r *SessionRepo) DailyLeaders(
-	ctx context.Context, incidentID int64, since time.Time, limit int,
+	ctx context.Context, incidentID int64, since, until time.Time, limit int,
 ) ([]domain.DrillLeader, error) {
 	out := []domain.DrillLeader{}
 	err := r.db.WithContext(ctx).Raw(`
@@ -168,10 +193,37 @@ func (r *SessionRepo) DailyLeaders(
 		  FROM lab_sessions s
 		  JOIN users u ON u.id = s.user_id`+recoveredSQL+`
 		 WHERE s.incident_id = ?
-		   AND s.started_at >= ?
+		   AND s.started_at >= ? AND s.started_at < ?
 		   AND tk.total > 0 AND ans.done = tk.total
 		 ORDER BY downtime_seconds, s.started_at
-		 LIMIT ?`, incidentID, since, limit,
+		 LIMIT ?`, incidentID, since, until, limit,
+	).Scan(&out).Error
+	return out, err
+}
+
+// RecoveriesSince lists every recovery since a moment, one row per session.
+//
+// Deliberately not aggregated here. Which scenario counted on which day is
+// decided in Go by the same date function that hands the scenario out, so a
+// query that ranked or counted would have to know that rule too — and then the
+// rule would be written down twice.
+//
+// The day is formatted in UTC, matching the boundary the pick rolls over on.
+func (r *SessionRepo) RecoveriesSince(
+	ctx context.Context, since time.Time,
+) ([]domain.DrillRecovery, error) {
+	out := []domain.DrillRecovery{}
+	err := r.db.WithContext(ctx).Raw(`
+		SELECT s.user_id,
+		       u.username AS player,
+		       to_char(s.started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+		       s.incident_id,`+downtimeSQL+`
+		  FROM lab_sessions s
+		  JOIN users u ON u.id = s.user_id`+recoveredSQL+`
+		 WHERE s.incident_id IS NOT NULL
+		   AND s.started_at >= ?
+		   AND tk.total > 0 AND ans.done = tk.total
+		 ORDER BY day, downtime_seconds`, since,
 	).Scan(&out).Error
 	return out, err
 }

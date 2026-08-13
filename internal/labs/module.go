@@ -120,6 +120,10 @@ func (m *Module) Routes(r *gin.Engine, api *gin.RouterGroup, required, admin gin
 	// DELETE /lab-sessions/:id rather than a role branch inside it: that one
 	// answers 404 for a session the caller does not own, and weakening it to
 	// let admins through would weaken it for everyone.
+	// Gỡ một báo cáo công khai. Nhận token vì đó là thứ người báo cáo gửi tới:
+	// một cái link, không phải một id phiên.
+	api.DELETE("/admin/shared-drills/:token", required, admin, h.AdminUnshareDrill)
+
 	api.GET("/admin/lab-sessions", required, admin, h.AdminRunningSessions)
 	api.DELETE("/admin/lab-sessions/:id", required, admin, h.AdminKillSession)
 
@@ -173,6 +177,10 @@ func (m *Module) Routes(r *gin.Engine, api *gin.RouterGroup, required, admin gin
 	limit := m.publicLimit.Middleware()
 	api.GET("/shared-drills/:token", limit, h.SharedDrill)
 	api.GET("/daily-drill", limit, h.Daily)
+	api.GET("/weekly-board", limit, h.Weekly)
+	// Chuỗi ngày của chính người gọi — thứ duy nhất trong nhóm này chỉ có nghĩa
+	// với một người, nên nó nằm sau đăng nhập.
+	api.GET("/my-drill-streak", required, h.Streak)
 	// The two a crawler reads. Same token, same 404 once it is taken down, so an
 	// unpublished report stops having a picture as well as a page.
 	api.GET("/shared-drills/:token/preview", limit, h.SharedDrillPreview)

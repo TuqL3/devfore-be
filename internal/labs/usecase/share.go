@@ -56,8 +56,36 @@ const dailyTTL = 15 * time.Second
 // real and worth naming: publishing or retiring a scenario mid-day reshuffles the
 // list, so today's pick can change under people who already played it.
 func (l *Labs) Daily(ctx context.Context, now time.Time) (*domain.DailyDrill, error) {
-	if hit := l.cachedDaily(now); hit != nil {
-		return hit, nil
+	return l.dayOf(ctx, now, true)
+}
+
+// ArchiveDays is how far back a past board may be asked for.
+//
+// A bound rather than none: the pick is a pure function of the date, so without
+// one a crawler could walk to the year 1970 and every step is two queries.
+const ArchiveDays = 90
+
+// Day is one past day's challenge and its board, for the archive.
+//
+// Refuses the future outright. The pick is computable for any date, so an
+// unguarded endpoint would hand out tomorrow's scenario to anybody who asked —
+// and the whole point of the daily is that nobody has seen it first.
+func (l *Labs) Day(ctx context.Context, day, now time.Time) (*domain.DailyDrill, error) {
+	day = day.UTC().Truncate(24 * time.Hour)
+	today := now.UTC().Truncate(24 * time.Hour)
+	if day.After(today) || day.Before(today.AddDate(0, 0, -ArchiveDays)) {
+		return nil, domain.ErrNoDailyDrill
+	}
+	return l.dayOf(ctx, day, day.Equal(today))
+}
+
+func (l *Labs) dayOf(ctx context.Context, at time.Time, isToday bool) (*domain.DailyDrill, error) {
+	// Only today is cached. A past board is read once by a crawler and rarely by
+	// anybody else, and keeping one of each in memory buys nothing.
+	if isToday {
+		if hit := l.cachedDaily(at); hit != nil {
+			return hit, nil
+		}
 	}
 	all, err := l.repo.DrillScenarios(ctx)
 	if err != nil {
@@ -66,11 +94,12 @@ func (l *Labs) Daily(ctx context.Context, now time.Time) (*domain.DailyDrill, er
 	if len(all) == 0 {
 		return nil, domain.ErrNoDailyDrill
 	}
-	pick := all[DailyIndex(now, len(all))]
+	pick := all[DailyIndex(at, len(all))]
 
-	utc := now.UTC()
+	utc := at.UTC()
 	midnight := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
-	leaders, err := l.repo.DailyLeaders(ctx, pick.IncidentID, midnight, DailyLeaderLimit)
+	leaders, err := l.repo.DailyLeaders(
+		ctx, pick.IncidentID, midnight, midnight.AddDate(0, 0, 1), DailyLeaderLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +117,9 @@ func (l *Labs) Daily(ctx context.Context, now time.Time) (*domain.DailyDrill, er
 		IncidentID: pick.IncidentID,
 		Leaders:    leaders,
 	}
-	l.storeDaily(now, out)
+	if isToday {
+		l.storeDaily(at, out)
+	}
 	return out, nil
 }
 
@@ -169,6 +200,24 @@ func (l *Labs) Unshare(ctx context.Context, sessionID string, userID int64) erro
 		return err
 	}
 	return l.repo.SetShareToken(ctx, sessionID, "")
+}
+
+// AdminUnshare takes somebody else's published report down.
+//
+// The lever that exists because the others cannot. The public page prints a
+// display name under this platform's own domain, and usernames are only checked
+// for shape at sign-up — three to thirty-two alphanumerics, which a slur fits
+// inside comfortably. No word list closes that: it would be incomplete in two
+// languages on the first day. What closes it is being able to remove a page in
+// one request, from a link somebody sends you.
+//
+// Same effect as the owner pressing "take it down": the token is dropped, the
+// old link is dead, and republishing later mints a new one.
+func (l *Labs) AdminUnshare(ctx context.Context, token string) (string, error) {
+	if token == "" {
+		return "", domain.ErrNotFound
+	}
+	return l.repo.ClearShareToken(ctx, token)
 }
 
 // Shared reads a published drill for anybody at all — the one route on the

@@ -92,6 +92,44 @@ type DrillLeader struct {
 	RequestsFailed  int
 }
 
+// DrillRecovery is one person recovering one scenario on one day. The raw row
+// behind both the week's board and a person's streak, which is why it carries
+// the day and the scenario rather than a rank: what counts as "solved today"
+// depends on which scenario that day belonged to, and only the caller knows
+// that.
+type DrillRecovery struct {
+	UserID          int64
+	Player          string
+	Day             string
+	IncidentID      int64
+	DowntimeSeconds int
+}
+
+// WeeklyLeader ranks a week, where every day was a different fault.
+//
+// Ranked by days solved, not by seconds. Seven days is seven scenarios, and
+// adding up times across them would put whoever drew the easiest week on top —
+// the number would look precise and mean nothing. Total time only breaks ties
+// between people who solved the same number of days.
+type WeeklyLeader struct {
+	Player     string
+	DaysSolved int
+	TotalTime  int
+}
+
+// DrillStreak is how many days in a row somebody has solved the daily.
+//
+// Counted back from today, and from yesterday if today has not been solved yet:
+// a streak that broke the moment the clock passed midnight would be a streak
+// nobody could ever hold while asleep.
+type DrillStreak struct {
+	Current int
+	Longest int
+	// Whether today's is already done. The screen says "keep it" or "you are
+	// about to lose it" from this, which a number alone cannot.
+	SolvedToday bool
+}
+
 // DailyDrill is the scenario everybody gets today, and how everybody did on it.
 //
 // One scenario for the whole day, chosen from the date rather than at random, so
