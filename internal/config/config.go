@@ -73,6 +73,12 @@ type Config struct {
 	// a billed call, so the default is deliberately small — raise it once you
 	// have watched what a day actually costs.
 	AIDailyLimit int `env:"AI_DAILY_LIMIT" envDefault:"10"`
+	// Lượt/phút cho mỗi địa chỉ trên hai route công khai (trang chia sẻ và ca
+	// trực hôm nay). 0 là tắt hẳn.
+	PublicRateLimit int `env:"PUBLIC_RATE_LIMIT" envDefault:"60"`
+	// Trần container chạy cùng lúc trên máy chủ. Đây là trần của máy, không phải
+	// của người dùng — luật 1 phiên/người đã lo phần công bằng.
+	MaxContainers int `env:"MAX_CONTAINERS" envDefault:"40"`
 }
 
 func Load() (*Config, error) {

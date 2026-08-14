@@ -176,6 +176,19 @@ func (r *SessionRepo) Create(ctx context.Context, s *domain.Session) error {
 	return err
 }
 
+// CountRunningContainers counts the sessions currently holding one.
+//
+// Container sessions only: a sim session has no container_id, costs the host
+// nothing, and counting it would refuse a free seat because paid ones are busy.
+func (r *SessionRepo) CountRunningContainers(ctx context.Context) (int, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT count(*) FROM lab_sessions
+		  WHERE status = 'running' AND container_id <> ''`,
+	).Scan(&n).Error
+	return int(n), err
+}
+
 func (r *SessionRepo) SetContainer(ctx context.Context, id, containerID string) error {
 	return r.db.WithContext(ctx).Exec(
 		`UPDATE lab_sessions SET container_id = ? WHERE id = ?`, containerID, id,

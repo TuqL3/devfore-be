@@ -177,7 +177,7 @@ func TestRecoveredAt(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := recoveredAt(&domain.Report{Answers: c.answers})
+			got := RecoveredAt(&domain.Report{Answers: c.answers})
 			switch {
 			case c.want == nil && got != nil:
 				t.Fatalf("muốn chưa cứu được, nhận %v", got)

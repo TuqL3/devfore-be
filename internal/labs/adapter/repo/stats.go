@@ -21,6 +21,7 @@ const statsWindow = "7 days"
 func (r *GradeRepo) RunningSessions(ctx context.Context) ([]domain.RunningSession, error) {
 	rows := []struct {
 		ID           string
+		UserID       int64
 		Username     string
 		LabTitle     string
 		StartedAt    time.Time
@@ -28,7 +29,7 @@ func (r *GradeRepo) RunningSessions(ctx context.Context) ([]domain.RunningSessio
 		HasContainer bool
 	}{}
 	err := r.db.WithContext(ctx).Raw(
-		`SELECT s.id, u.username, l.title AS lab_title,
+		`SELECT s.id, s.user_id, u.username, l.title AS lab_title,
 		        s.started_at, s.expires_at,
 		        s.container_id <> '' AS has_container
 		   FROM lab_sessions s

@@ -195,6 +195,47 @@ func (r *Repo) Edit(ctx context.Context, id, author int64, body string) (*Messag
 	return r.ByID(ctx, id)
 }
 
+// Recent is the moderation feed: the newest messages across the whole room,
+// including ones already taken back.
+//
+// Deleted rows stay in the list because a moderator's question is "what has been
+// said here", and a row that vanished when its author thought better of it is
+// part of that answer — the body is already blanked in the table, so what shows
+// is that somebody posted and removed something, not what it was.
+func (r *Repo) Recent(ctx context.Context, limit int) ([]Message, error) {
+	if limit <= 0 || limit > 300 {
+		limit = 100
+	}
+	out := []Message{}
+	err := r.db.WithContext(ctx).Raw(
+		`SELECT `+columns+`
+		   FROM chat_messages
+		  ORDER BY created_at DESC
+		  LIMIT ?`, limit,
+	).Scan(&out).Error
+	return out, err
+}
+
+// DeleteAsAdmin takes a message down regardless of who wrote it.
+//
+// Separate from Delete rather than a flag on it: that one refuses anything the
+// caller does not own, and weakening it to let an admin through would weaken it
+// for every student too. Same write, different authority, spelled out.
+func (r *Repo) DeleteAsAdmin(ctx context.Context, id int64) (*Message, error) {
+	res := r.db.WithContext(ctx).Exec(
+		`UPDATE chat_messages SET body = '', deleted_at = now()
+		  WHERE id = ? AND deleted_at IS NULL`, id)
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		// Already gone is the state the caller wanted. Reading it back tells the
+		// difference between that and a message that never existed.
+		return r.ByID(ctx, id)
+	}
+	return r.ByID(ctx, id)
+}
+
 // Delete takes a message back. Same shape as Edit, and idempotent: deleting one
 // that is already gone is the state the caller asked for, not an error.
 func (r *Repo) Delete(ctx context.Context, id, author int64) (*Message, error) {

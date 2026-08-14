@@ -26,7 +26,11 @@ type Stats struct {
 // who and what rather than ids alone: the decision an admin makes here is
 // "should this person still have this running", and an id answers neither half.
 type RunningSession struct {
-	ID        string
+	ID string
+	// Carried so the screen can link to what this person has been doing. The
+	// decision here is about a person, and a name with nothing behind it makes
+	// the admin go and search for them by hand.
+	UserID    int64
 	Username  string
 	LabTitle  string
 	StartedAt time.Time

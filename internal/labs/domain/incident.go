@@ -37,6 +37,113 @@ type TimelineEntry struct {
 	Command string
 }
 
+// SharedDrill is a finished drill as a stranger sees it — the numbers, the name
+// of the fault, and nothing else.
+//
+// What is missing is the point. No timeline: it is a verbatim record of what
+// somebody typed into a shell, which is where a mistyped password or an internal
+// hostname ends up. No RevealMD: that is the walkthrough, and the same page
+// offers the reader a go at this exact scenario. No email, no session id, no
+// user id.
+//
+// IncidentTitle names the fault, so it is a spoiler for anyone about to try it.
+// It travels anyway — the owner published a result and the result is about that
+// fault — and the page keeps it behind a deliberate click.
+type SharedDrill struct {
+	Token    string
+	LabSlug  string
+	LabTitle string
+	// Which scenario to hand the reader if they take the challenge. This is the
+	// whole of "the same seed": a drill has no random number to replay, it has a
+	// row that says how the service was broken.
+	IncidentID    int64
+	IncidentTitle string
+	// Display name of whoever ran it. Never their email.
+	Player    string
+	StartedAt time.Time
+	// False when the drill ended with the service still down, which is a result
+	// rather than a missing number.
+	Recovered       bool
+	DowntimeSeconds int
+	RequestsFailed  int
+	RPS             int
+}
+
+// DrillScenario is one playable fault, as the daily pick sees the field: a lab
+// paired with one of its scenarios. Labs carrying several appear several times,
+// which is the intended weighting — a lab with four faults has four days' worth
+// of material in it.
+type DrillScenario struct {
+	LabID      int64
+	LabSlug    string
+	LabTitle   string
+	IncidentID int64
+	// Carried so the cost of an outage is worked out in one place — every row of
+	// the day's board is against this one scenario, so its rate is the rate.
+	RPS int
+}
+
+// DrillLeader is one row of the daily board. Ranked by downtime, so the fastest
+// recovery is first; drills that never recovered are not on the board at all,
+// because "did not fix it" has no time to rank.
+type DrillLeader struct {
+	Player          string
+	DowntimeSeconds int
+	RequestsFailed  int
+}
+
+// DrillRecovery is one person recovering one scenario on one day. The raw row
+// behind both the week's board and a person's streak, which is why it carries
+// the day and the scenario rather than a rank: what counts as "solved today"
+// depends on which scenario that day belonged to, and only the caller knows
+// that.
+type DrillRecovery struct {
+	UserID          int64
+	Player          string
+	Day             string
+	IncidentID      int64
+	DowntimeSeconds int
+}
+
+// WeeklyLeader ranks a week, where every day was a different fault.
+//
+// Ranked by days solved, not by seconds. Seven days is seven scenarios, and
+// adding up times across them would put whoever drew the easiest week on top —
+// the number would look precise and mean nothing. Total time only breaks ties
+// between people who solved the same number of days.
+type WeeklyLeader struct {
+	Player     string
+	DaysSolved int
+	TotalTime  int
+}
+
+// DrillStreak is how many days in a row somebody has solved the daily.
+//
+// Counted back from today, and from yesterday if today has not been solved yet:
+// a streak that broke the moment the clock passed midnight would be a streak
+// nobody could ever hold while asleep.
+type DrillStreak struct {
+	Current int
+	Longest int
+	// Whether today's is already done. The screen says "keep it" or "you are
+	// about to lose it" from this, which a number alone cannot.
+	SolvedToday bool
+}
+
+// DailyDrill is the scenario everybody gets today, and how everybody did on it.
+//
+// One scenario for the whole day, chosen from the date rather than at random, so
+// two people comparing times are comparing the same fault. Day is the date the
+// choice was made from, in UTC — a board that rolled over at each viewer's local
+// midnight would be several boards.
+type DailyDrill struct {
+	Day        string
+	LabSlug    string
+	LabTitle   string
+	IncidentID int64
+	Leaders    []DrillLeader
+}
+
 // IncidentReport is the drill as the result screen tells it: how long the outage
 // lasted, what it is assumed to have cost, what the fault actually was, and every
 // attempt made along the way.

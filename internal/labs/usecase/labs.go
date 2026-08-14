@@ -8,11 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
+	"github.com/devforge/be/internal/events"
 	"github.com/devforge/be/internal/labs/adapter/dockerx"
 	"github.com/devforge/be/internal/labs/adapter/repo"
 	"github.com/devforge/be/internal/labs/domain"
@@ -30,19 +33,60 @@ const checkTimeout = 10 * time.Second
 // a client bug nobody would notice. A chosen number, not a measured one.
 const MaxSimRuns = 30
 
+// MaxContainers is how many lab containers the host will hold at once, when the
+// caller does not set one.
+//
+// A ceiling on the machine, not on fairness — the one-session-per-user index
+// already handles fairness. Without it, a link that goes round on a Monday
+// morning is answered by docker running out of memory, which arrives as a failed
+// start for everybody including the students already inside.
+const MaxContainers = 40
+
 type Labs struct {
+	// The day's board, kept for a few seconds. Its own lock rather than one
+	// around the whole struct: everything else here is stateless, and a mutex on
+	// the type would start guarding things that never needed guarding.
+	dailyMu sync.RWMutex
+	daily   *domain.DailyDrill
+	dailyAt time.Time
+
 	repo    *repo.SessionRepo
 	grades  *repo.GradeRepo
 	sims    *repo.SimRepo
 	runtime *dockerx.Runtime
 	ttl     time.Duration
+	// Ceiling on containers alive at once. Zero means the default; negative
+	// switches the check off, which is what a test that never starts one wants.
+	maxContainers int
+	// Where the failures an admin would act on get written. Optional: nil is a
+	// working system with a quieter screen, which is what every test is.
+	events *events.Recorder
+}
+
+// SetEvents hands the recorder over after construction, the same way audit is
+// wired. Keeps `events` and `labs` two packages rather than a pair with an
+// ordering, and leaves every existing NewLabs call site untouched.
+func (l *Labs) SetEvents(r *events.Recorder) { l.events = r }
+
+// note records one event, and is a no-op when nothing is wired. Every caller is
+// already handling a failure, so this must never add a branch to their path.
+func (l *Labs) note(ctx context.Context, e events.Event) {
+	if l.events != nil {
+		l.events.Record(ctx, e)
+	}
 }
 
 func NewLabs(
 	r *repo.SessionRepo, g *repo.GradeRepo, s *repo.SimRepo,
-	rt *dockerx.Runtime, ttl time.Duration,
+	rt *dockerx.Runtime, ttl time.Duration, maxContainers int,
 ) *Labs {
-	return &Labs{repo: r, grades: g, sims: s, runtime: rt, ttl: ttl}
+	if maxContainers == 0 {
+		maxContainers = MaxContainers
+	}
+	return &Labs{
+		repo: r, grades: g, sims: s, runtime: rt, ttl: ttl,
+		maxContainers: maxContainers,
+	}
 }
 
 type StartOutput struct {
@@ -53,7 +97,14 @@ type StartOutput struct {
 // Start claims the user's single session slot in the database before it asks
 // docker for anything. Doing it the other way round would leave a container
 // running with no row to reap it by if the insert then lost the race.
-func (l *Labs) Start(ctx context.Context, userID int64, labSlug string) (StartOutput, error) {
+//
+// `incidentID` asks for one named fault instead of a random draw — that is how a
+// shared report and the daily drill hand somebody the same scenario. Zero is the
+// ordinary case and means draw. It reaches applyIncident, which checks the id
+// belongs to this lab before anything is broken.
+func (l *Labs) Start(
+	ctx context.Context, userID int64, labSlug string, incidentID int64,
+) (StartOutput, error) {
 	spec, err := l.repo.SpecBySlug(ctx, labSlug)
 	if err != nil {
 		return StartOutput{}, err
@@ -101,11 +152,25 @@ func (l *Labs) Start(ctx context.Context, userID int64, labSlug string) (StartOu
 		return StartOutput{Session: s, Spec: spec}, nil
 	}
 
+	// The ceiling is checked here rather than at the top: everything above this
+	// line is free, and a sim lab must not be refused because the container labs
+	// are full. Counted, not reserved — two starts landing in the same instant can
+	// both pass and put the host one over. That is a seat, not an outage, and the
+	// alternative is a lock held across a docker call.
+	if err := l.capacity(ctx); err != nil {
+		_, _ = l.repo.End(context.WithoutCancel(ctx), id, domain.StatusEnded)
+		return StartOutput{}, err
+	}
+
 	containerID, err := l.runtime.Create(ctx, id, spec.Image)
 	if err != nil {
 		// The row is holding the user's only slot for a container that does not
 		// exist. Release it now or they cannot start anything until it expires.
 		_, _ = l.repo.End(context.WithoutCancel(ctx), id, domain.StatusEnded)
+		l.note(ctx, events.Event{
+			Kind: events.KindStartFailed, ActorID: userID, Subject: spec.LabSlug,
+			Detail: "không tạo được container: " + err.Error(),
+		})
 		return StartOutput{}, err
 	}
 	if err := l.repo.SetContainer(ctx, id, containerID); err != nil {
@@ -118,12 +183,37 @@ func (l *Labs) Start(ctx context.Context, userID int64, labSlug string) (StartOu
 	// The fault goes in last, once there is a container to put it in. A failure
 	// here is treated like a container that would not start: take it all back
 	// rather than hand somebody a drill that broke halfway through being set up.
-	if err := l.applyIncident(ctx, s, spec); err != nil {
+	if err := l.applyIncident(ctx, s, spec, incidentID); err != nil {
 		_ = l.runtime.Remove(context.WithoutCancel(ctx), containerID)
 		_, _ = l.repo.End(context.WithoutCancel(ctx), id, domain.StatusEnded)
 		return StartOutput{}, err
 	}
 	return StartOutput{Session: s, Spec: spec}, nil
+}
+
+// capacity refuses a start when every container seat is taken.
+//
+// A failure to count opens the gate rather than closing it: the count is a guard
+// against a crowd, and a database blip that stops one student starting a lab is
+// a worse outcome than one container over the line.
+func (l *Labs) capacity(ctx context.Context) error {
+	if l.maxContainers < 0 {
+		return nil
+	}
+	n, err := l.repo.CountRunningContainers(ctx)
+	if err != nil {
+		slog.Error("count running containers", "err", err)
+		return nil
+	}
+	if n >= l.maxContainers {
+		slog.Warn("container capacity reached", "running", n, "max", l.maxContainers)
+		l.note(ctx, events.Event{
+			Kind: events.KindCapacityRefused, Severity: events.SeverityWarn,
+			Detail: fmt.Sprintf("từ chối mở lab: %d/%d container đang chạy", n, l.maxContainers),
+		})
+		return domain.ErrAtCapacity
+	}
+	return nil
 }
 
 // Owned is the guard every session route goes through. Sessions are addressed by
@@ -356,6 +446,16 @@ func (l *Labs) Check(
 			// The docker client wraps a cancelled context in its own error, so the
 			// deadline is read off the context rather than unwrapped from it.
 			if runCtx.Err() != nil && ctx.Err() == nil {
+				// Worth an admin's attention rather than a student's: a script that
+				// times out is an authoring bug, and the student is only told to
+				// try again. The task id is the subject because that is the thing
+				// somebody has to go and fix.
+				l.note(ctx, events.Event{
+					Kind: events.KindCheckTimeout, ActorID: userID,
+					Subject: fmt.Sprintf("task %d", task.ID),
+					Detail: fmt.Sprintf("check script của nhiệm vụ %d (lab %d) chạy quá %s",
+						task.ID, task.LabID, checkTimeout),
+				})
 				return domain.Grade{}, domain.ErrCheckTimeout
 			}
 			return domain.Grade{}, err

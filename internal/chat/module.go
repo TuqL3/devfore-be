@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"github.com/devforge/be/internal/audit"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +19,9 @@ type Config struct {
 }
 
 type Module struct {
+	// Ghi lại ai xoá tin của ai. Tuỳ chọn: thiếu thì nút vẫn chạy, chỉ là không
+	// ai biết ai đã bấm.
+	audit         *audit.Recorder
 	db            *gorm.DB
 	repo          *Repo
 	hub           *Hub
@@ -48,6 +52,14 @@ func New(db *gorm.DB, cfg Config) *Module {
 // Routes mounts the room. Both endpoints are behind the caller's Required
 // middleware: the room is for signed-in students, and the websocket handshake
 // is authorised by the same cookie as everything else.
+// AdminRoutes mounts the moderation half. Split from Routes because it needs a
+// second middleware and because the two answer different questions: one is the
+// room, the other is somebody looking at the room.
+func (m *Module) AdminRoutes(api *gin.RouterGroup, required, admin gin.HandlerFunc) {
+	api.GET("/admin/chat", required, admin, m.AdminRecent)
+	api.DELETE("/admin/chat/:id", required, admin, m.AdminDelete)
+}
+
 func (m *Module) Routes(r *gin.Engine, api *gin.RouterGroup, required gin.HandlerFunc) {
 	api.GET("/chat/messages", required, m.Messages)
 	api.GET("/chat/conversations", required, m.Conversations)

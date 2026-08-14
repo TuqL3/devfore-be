@@ -35,6 +35,7 @@ type statsResponse struct {
 
 type runningSession struct {
 	ID           string    `json:"id"`
+	UserID       int64     `json:"user_id"`
 	Username     string    `json:"username"`
 	LabTitle     string    `json:"lab_title"`
 	StartedAt    time.Time `json:"started_at"`

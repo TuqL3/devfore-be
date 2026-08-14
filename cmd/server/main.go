@@ -18,6 +18,7 @@ import (
 	"github.com/devforge/be/internal/config"
 	"github.com/devforge/be/internal/courses"
 	"github.com/devforge/be/internal/db"
+	"github.com/devforge/be/internal/events"
 	"github.com/devforge/be/internal/labs"
 )
 
@@ -97,7 +98,10 @@ func run() error {
 		OpenRouterKey:   cfg.OpenRouterKey,
 		OpenRouterModel: cfg.OpenRouterModel,
 		PublicURL:       cfg.PublicURL,
+		FrontendURL:     cfg.FrontendURL,
 		AIDailyLimit:    cfg.AIDailyLimit,
+		PublicRateLimit: cfg.PublicRateLimit,
+		MaxContainers:   cfg.MaxContainers,
 	})
 	if err != nil {
 		return err
@@ -111,6 +115,13 @@ func run() error {
 	auditRec := audit.New(gdb)
 	authMod.SetAudit(auditRec)
 	labsMod.SetAudit(auditRec)
+	chatMod.SetAudit(auditRec)
+
+	// Two recorders, two different questions. Audit answers "who did this to
+	// whom" and is written only by deliberate admin actions; events answer "what
+	// went wrong" and are written by the code paths that fail.
+	eventRec := events.New(gdb)
+	labsMod.SetEvents(eventRec)
 
 	if cfg.IsProd() {
 		gin.SetMode(gin.ReleaseMode)

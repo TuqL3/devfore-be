@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/devforge/be/internal/audit"
+	"github.com/devforge/be/internal/events"
 	"github.com/devforge/be/internal/i18n"
 	"github.com/devforge/be/internal/labs/domain"
 	"github.com/devforge/be/internal/labs/usecase"
@@ -18,9 +19,22 @@ import (
 type Handler struct {
 	uc    *usecase.Labs
 	audit *audit.Recorder
+	// Absolute origins, needed by the one endpoint a crawler reads: a preview
+	// card cannot carry a relative image URL, and the canonical link has to point
+	// at the app rather than at the API.
+	publicURL   string
+	frontendURL string
+	events      *events.Recorder
 }
 
-func NewHandler(uc *usecase.Labs) *Handler { return &Handler{uc: uc} }
+func NewHandler(uc *usecase.Labs, publicURL, frontendURL string) *Handler {
+	return &Handler{uc: uc, publicURL: publicURL, frontendURL: frontendURL}
+}
+
+// SetEvents hands the handler the event recorder, which it reads from for the
+// admin feed and writes to for nothing — every write lives in the usecase, next
+// to the failure it describes.
+func (h *Handler) SetEvents(r *events.Recorder) { h.events = r }
 
 // SetAudit hands the handler the recorder for the one endpoint that ends
 // somebody else's work. Set after construction so labs and audit stay
@@ -91,15 +105,28 @@ func newSessionResponse(s *domain.Session) sessionResponse {
 	}
 }
 
+// Start opens a session. `?incident=` names one fault instead of drawing one,
+// which is how a shared report and the daily drill hand somebody the same
+// scenario. A query parameter rather than a body: this route has never had one,
+// and the value is a single number arriving in a link.
 func (h *Handler) Start(c *gin.Context) {
-	out, err := h.uc.Start(c.Request.Context(), userID(c), c.Param("slug"))
+	incidentID, _ := strconv.ParseInt(c.Query("incident"), 10, 64)
+	out, err := h.uc.Start(c.Request.Context(), userID(c), c.Param("slug"), incidentID)
 	switch {
 	case errors.Is(err, domain.ErrLabNotFound):
 		abort(c, http.StatusNotFound, "bài lab không tồn tại")
+	case errors.Is(err, domain.ErrIncidentNotInLab):
+		abort(c, http.StatusNotFound, "kịch bản sự cố này không còn dùng được")
 	case errors.Is(err, domain.ErrAlreadyRunning):
 		abort(c, http.StatusConflict, "bạn đang có một phiên lab chạy dở, hãy đóng nó trước")
 	case errors.Is(err, domain.ErrNotEnrolled):
 		abort(c, http.StatusForbidden, "bạn cần đăng ký khoá học này trước khi làm lab")
+	case errors.Is(err, domain.ErrAtCapacity):
+		// 503, not 500: the platform is working and it is full. The number of
+		// people inside is not something to tell a stranger, so the sentence says
+		// what to do instead of how full it is.
+		abort(c, http.StatusServiceUnavailable,
+			"máy chủ đang kín chỗ, thử lại sau vài phút")
 	case err != nil:
 		serverError(c, err)
 	default:

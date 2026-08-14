@@ -206,9 +206,23 @@ GET    /api/courses/:slug/status       → tab Trạng thái
 
 GET    /api/labs/:slug
 POST   /api/labs/:slug/start           → tạo container, trả sessionID + expires_at
+                                         ?incident=<id> xin đúng 1 kịch bản thay vì bốc ngẫu nhiên
 POST   /api/sessions/:id/check         → chấm tạm, chạy nhiều lần
 POST   /api/sessions/:id/submit        → chấm cuối, đóng session, xoá container
 GET    /api/history                    → lịch sử làm bài user hiện tại
+
+POST   /api/lab-sessions/:id/share     → đăng báo cáo ca trực công khai, trả token
+DELETE /api/lab-sessions/:id/share     → gỡ xuống, link cũ chết hẳn
+
+GET    /api/my-drill-streak            → chuỗi ngày liên tiếp của chính mình
+
+# Bốn route KHÔNG cần đăng nhập — link chia sẻ phải mở được cho người lạ.
+# Tất cả đều qua rate limit theo IP (PUBLIC_RATE_LIMIT, mặc định 60/phút).
+GET    /api/shared-drills/:token       → số liệu + tên sự cố. Không timeline, không lời giải
+GET    /api/shared-drills/:token/preview → HTML có thẻ og:* cho trình thu thập
+GET    /api/shared-drills/:token/og.png  → ảnh 1200x630 vẽ từ số liệu
+GET    /api/daily-drill[?day=]         → ca trực hôm nay + bảng ngày; `day` đọc ca đã qua (≤90 ngày, không nhận ngày mai)
+GET    /api/weekly-board               → bảng 7 ngày, xếp theo SỐ NGÀY giải được
 
 WS     /ws/terminal/:sessionID
 WS     /ws/chat

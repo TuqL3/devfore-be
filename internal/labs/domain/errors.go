@@ -49,6 +49,24 @@ var (
 	// container lab answers this — so it is what tells the two kinds of lab
 	// apart, in the one place that asks.
 	ErrNoIncident = errors.New("lab has no incident scenario")
+	// Publishing the report of a session that never drew a fault. The share page
+	// is built out of downtime and requests failed, and an ordinary lab has
+	// neither — so this is a client asking for a page that has nothing to put on
+	// it, not a permission problem.
+	ErrNotDrill = errors.New("session is not a drill")
+	// Starting a drill against a scenario id that is not one of this lab's live
+	// ones. Refused rather than quietly falling back to a random draw: the whole
+	// promise of a shared link is that it hands you the same fault, and a silent
+	// fallback would break that without ever saying so.
+	ErrIncidentNotInLab = errors.New("scenario does not belong to this lab")
+	// No drill is published, so there is nothing for today to be. Answered to the
+	// client as an empty day rather than as a failure — a platform with no
+	// scenarios yet is a stage of a project, not a bug.
+	ErrNoDailyDrill = errors.New("no published drill scenario")
+	// Every container seat on the host is taken. A capacity answer, not a fault:
+	// the platform is up, it is full, and the person asking should be told to
+	// come back in a few minutes rather than shown a docker error.
+	ErrAtCapacity = errors.New("no free container capacity")
 	// The daily budget for AI-generated scenarios is spent. Every generation is
 	// a paid call against a real account, so this is a cost control before it is
 	// anything else — and it is reported to the person rather than logged,

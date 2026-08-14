@@ -24,6 +24,21 @@
 		reverse_proxy api:8080
 	}
 
+	# Trình thu thập của Facebook/X/Slack/Zalo không chạy JavaScript, mà app là
+	# SPA — nên link chia sẻ dán vào chỗ nào cũng hiện một ô trắng. Đưa riêng
+	# đám đó sang endpoint trả HTML có sẵn thẻ og:*; người thật vẫn vào app.
+	#
+	# Khối này phải đứng TRƯỚC `handle` bắt-tất-cả bên dưới: Caddy chạy các
+	# `handle` theo thứ tự viết, và cái bắt-tất-cả nuốt mọi đường dẫn.
+	@crawler {
+		path_regexp share ^/r/([A-Za-z0-9_-]+)/?$
+		header_regexp User-Agent (?i)(facebookexternalhit|twitterbot|slackbot|discordbot|telegrambot|linkedinbot|whatsapp|zalo|skypeuripreview|embedly|quora link preview|pinterest|redditbot|bingbot|googlebot)
+	}
+	handle @crawler {
+		rewrite * /api/shared-drills/{re.share.1}/preview
+		reverse_proxy api:8080
+	}
+
 	handle {
 		reverse_proxy web:5173
 	}

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devforge/be/internal/events"
 	"github.com/devforge/be/internal/labs/domain"
 )
 
@@ -46,8 +47,22 @@ func drillDeadline(spec *domain.Spec, ttl time.Duration) time.Duration {
 // a student must never be dropped into a drill that half-broke, because the
 // evidence they are about to reason from would be a mix of the author's fault and
 // a failure nobody intended.
-func (l *Labs) applyIncident(ctx context.Context, s *domain.Session, spec *domain.Spec) error {
-	inc, err := l.repo.PickIncident(ctx, spec.LabID)
+//
+// `want` names a scenario instead of drawing one, which is what a shared link and
+// the daily drill both arrive with. Zero means draw. A named scenario that is not
+// a live one of this lab is refused rather than replaced by a draw: the promise a
+// shared link makes is that it hands you the same fault, and quietly handing over
+// a different one would break that promise without ever saying so.
+func (l *Labs) applyIncident(
+	ctx context.Context, s *domain.Session, spec *domain.Spec, want int64,
+) error {
+	var inc *domain.Incident
+	var err error
+	if want > 0 {
+		inc, err = l.repo.IncidentForLab(ctx, spec.LabID, want)
+	} else {
+		inc, err = l.repo.PickIncident(ctx, spec.LabID)
+	}
 	if errors.Is(err, domain.ErrNoIncident) {
 		return nil
 	}
@@ -74,6 +89,13 @@ func (l *Labs) applyIncident(ctx context.Context, s *domain.Session, spec *domai
 		// key talking, and the line it failed on names the fault outright.
 		slog.Error("incident script failed",
 			"incident", inc.ID, "lab", spec.LabID, "code", code, "out", out)
+		// The event carries the scenario and the exit code, never the output:
+		// that output is the answer key talking, and an admin screen is not where
+		// a break script should be quotable from.
+		l.note(ctx, events.Event{
+			Kind: events.KindIncidentFailed, ActorID: s.UserID, Subject: spec.LabSlug,
+			Detail: fmt.Sprintf("kịch bản %d thoát với mã %d — học viên không mở được ca này", inc.ID, code),
+		})
 		return fmt.Errorf("kịch bản sự cố %d thoát với mã %d", inc.ID, code)
 	}
 
@@ -114,6 +136,11 @@ func (l *Labs) captureCommandLog(ctx context.Context, s *domain.Session) {
 	}
 	if err := l.repo.SaveCommandLog(ctx, s.ID, history); err != nil {
 		slog.Error("incident history save", "session", s.ID, "err", err)
+		l.note(ctx, events.Event{
+			Kind: events.KindHistoryLost, Severity: events.SeverityWarn,
+			ActorID: s.UserID, Subject: s.ID,
+			Detail: "không lưu được dòng thời gian của ca trực: " + err.Error(),
+		})
 	}
 }
 
@@ -142,7 +169,7 @@ func (l *Labs) attachIncident(ctx context.Context, s *domain.Session, rep *domai
 		Title:       inc.Title,
 		RevealMD:    inc.RevealMD,
 		RPS:         inc.RPS,
-		RecoveredAt: recoveredAt(rep),
+		RecoveredAt: RecoveredAt(rep),
 		Timeline:    ParseTimeline(log),
 	}
 	if out.RecoveredAt != nil {
@@ -153,14 +180,20 @@ func (l *Labs) attachIncident(ctx context.Context, s *domain.Session, rep *domai
 	rep.Incident = out
 }
 
-// recoveredAt is when the student declared the service healthy: the moment the
+// RecoveredAt is when the student declared the service healthy: the moment the
 // last of the lab's tasks went green.
+//
+// Exported because it is not the only place this rule is written down: the
+// leaderboard and the public page decide the same thing in SQL, in
+// repo.recoveredSQL. Two definitions of "recovered" that drift apart produce a
+// board listing somebody the report screen says never fixed it — so the two are
+// held against each other by a test, and a test needs to be able to call this.
 //
 // The last rather than the first, because a lab may ask for more than the service
 // being up, and an outage is not over while any part of the ask is still failing.
 // Nil unless every task passed — a drill that ran out of time has no recovery, and
 // dating one from a partial pass would be the report inventing a moment.
-func recoveredAt(rep *domain.Report) *time.Time {
+func RecoveredAt(rep *domain.Report) *time.Time {
 	var last *time.Time
 	for _, a := range rep.Answers {
 		if a.Passed == nil || !*a.Passed || a.AnsweredAt == nil {
