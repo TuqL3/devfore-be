@@ -169,7 +169,7 @@ func (l *Labs) Start(
 		_, _ = l.repo.End(context.WithoutCancel(ctx), id, domain.StatusEnded)
 		l.note(ctx, events.Event{
 			Kind: events.KindStartFailed, ActorID: userID, Subject: spec.LabSlug,
-			Detail: "không tạo được container: " + err.Error(),
+			Detail: "could not create the container: " + err.Error(),
 		})
 		return StartOutput{}, err
 	}
@@ -209,7 +209,7 @@ func (l *Labs) capacity(ctx context.Context) error {
 		slog.Warn("container capacity reached", "running", n, "max", l.maxContainers)
 		l.note(ctx, events.Event{
 			Kind: events.KindCapacityRefused, Severity: events.SeverityWarn,
-			Detail: fmt.Sprintf("từ chối mở lab: %d/%d container đang chạy", n, l.maxContainers),
+			Detail: fmt.Sprintf("refused to open a lab: %d/%d containers running", n, l.maxContainers),
 		})
 		return domain.ErrAtCapacity
 	}
@@ -453,7 +453,7 @@ func (l *Labs) Check(
 				l.note(ctx, events.Event{
 					Kind: events.KindCheckTimeout, ActorID: userID,
 					Subject: fmt.Sprintf("task %d", task.ID),
-					Detail: fmt.Sprintf("check script của nhiệm vụ %d (lab %d) chạy quá %s",
+					Detail: fmt.Sprintf("check script for task %d (lab %d) ran longer than %s",
 						task.ID, task.LabID, checkTimeout),
 				})
 				return domain.Grade{}, domain.ErrCheckTimeout

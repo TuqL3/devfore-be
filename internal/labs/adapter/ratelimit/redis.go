@@ -18,6 +18,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/devforge/be/internal/events"
+	"github.com/devforge/be/internal/i18n"
 )
 
 type Redis struct {
@@ -83,13 +84,16 @@ func (r *Redis) Middleware() gin.HandlerFunc {
 				r.rec.Record(c.Request.Context(), events.Event{
 					Kind: events.KindRateLimited, Severity: events.SeverityWarn,
 					Subject: c.ClientIP(),
-					Detail: "vượt " + strconv.Itoa(r.limit) + " lượt/" +
-						r.window.String() + " trên " + c.Request.URL.Path,
+					Detail: "over " + strconv.Itoa(r.limit) + " requests/" +
+						r.window.String() + " on " + c.Request.URL.Path,
 				})
 			}
 			c.Header("Retry-After", strconv.Itoa(int(r.window.Seconds())))
 			c.AbortWithStatusJSON(http.StatusTooManyRequests,
-				gin.H{"error": "quá nhiều yêu cầu, thử lại sau ít giây"})
+				// Through i18n like every other error message: the sentence is
+				// its own key, and answering raw here was the one route that
+				// ignored Accept-Language.
+				gin.H{"error": i18n.Msg(c, "quá nhiều yêu cầu, thử lại sau ít giây")})
 			return
 		}
 		c.Next()

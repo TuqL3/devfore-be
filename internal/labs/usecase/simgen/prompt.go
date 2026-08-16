@@ -33,7 +33,7 @@ type genOutput struct {
 func decode(raw json.RawMessage) (*domain.Scenario, string, error) {
 	var out genOutput
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, "", fmt.Errorf("kết quả không phải JSON đọc được: %w", err)
+		return nil, "", fmt.Errorf("the result is not readable JSON: %w", err)
 	}
 
 	sc := &domain.Scenario{
@@ -45,10 +45,10 @@ func decode(raw json.RawMessage) (*domain.Scenario, string, error) {
 	}
 	for _, st := range out.Steps {
 		if st.Name == "" {
-			return nil, "", fmt.Errorf("có một step không có tên")
+			return nil, "", fmt.Errorf("one step has no name")
 		}
 		if _, dup := sc.Catalog[st.Name]; dup {
-			return nil, "", fmt.Errorf("step %q khai hai lần", st.Name)
+			return nil, "", fmt.Errorf("step %q is declared twice", st.Name)
 		}
 		sc.Catalog[st.Name] = domain.ScenarioStep{
 			Seconds:   st.Seconds,
@@ -80,21 +80,21 @@ func outputSchema() map[string]any {
 			"notes", "runner_count", "cache_restore_seconds", "steps", "examples",
 		},
 		"properties": map[string]any{
-			"notes": str("Một hoặc hai câu tiếng Việt nói bộ step này mô phỏng cái gì " +
-				"và bài học rút ra khi xếp job khác nhau. Hiện cho người dùng đọc."),
+			"notes": str("One or two sentences saying what this step catalog simulates " +
+				"and the lesson that comes out of scheduling the jobs differently. Shown to the user."),
 			"runner_count": map[string]any{
 				"type": "integer",
 				"description": fmt.Sprintf(
-					"Số job chạy song song tối đa. Từ 1 đến %d.", sim.MaxScenarioRunners),
+					"Maximum number of jobs running in parallel. From 1 to %d.", sim.MaxScenarioRunners),
 			},
 			"cache_restore_seconds": map[string]any{
 				"type":        "integer",
-				"description": "Số giây một step tốn khi lấy từ cache thay vì làm lại. Thường 5-15.",
+				"description": "Seconds a step costs when restored from cache instead of redone. Usually 5-15.",
 			},
 			"steps": map[string]any{
 				"type": "array",
 				"description": fmt.Sprintf(
-					"Bộ step pipeline được phép dùng. Từ 4 đến %d step.", sim.MaxScenarioSteps),
+					"The pipeline steps that may be used. From 4 to %d steps.", sim.MaxScenarioSteps),
 				"items": map[string]any{
 					"type":                 "object",
 					"additionalProperties": false,
@@ -102,39 +102,39 @@ func outputSchema() map[string]any {
 						"name", "seconds", "cacheable", "produces", "consumes", "flaky",
 					},
 					"properties": map[string]any{
-						"name": str("Tên step, chữ thường và gạch ngang, ví dụ \"npm-ci\", " +
+						"name": str("Step name, lowercase and hyphens, for example \"npm-ci\", " +
 							"\"go-test\", \"docker-build\"."),
 						"seconds": map[string]any{
 							"type":        "integer",
-							"description": "Step này mất bao lâu, tính bằng giây. Ước lượng thực tế.",
+							"description": "How long this step takes, in seconds. A realistic estimate.",
 						},
-						"cacheable": str("Tên khoá cache step này lưu lại, ví dụ \"node_modules\". " +
-							"Chuỗi rỗng nếu step không để lại gì đáng cache."),
-						"produces": str("Tên artifact step này tạo ra, ví dụ \"dist\". " +
-							"Chuỗi rỗng nếu không tạo gì."),
-						"consumes": str("Tên artifact step này cần có sẵn. Chuỗi rỗng nếu không cần gì. " +
-							"Artifact phải do một step khác trong danh sách này tạo ra."),
+						"cacheable": str("Name of the cache key this step leaves behind, for example \"node_modules\". " +
+							"Empty string if the step leaves nothing worth caching."),
+						"produces": str("Name of the artifact this step produces, for example \"dist\". " +
+							"Empty string if it produces nothing."),
+						"consumes": str("Name of the artifact this step requires. Empty string if it requires nothing. " +
+							"The artifact must be produced by another step in this list."),
 						"flaky": map[string]any{
 							"type": "integer",
-							"description": "Phần trăm số lượt step này hỏng ngẫu nhiên, 0 đến 100. " +
-								"Để 0 trừ khi đang cố tình dạy về flaky test.",
+							"description": "Percentage of runs in which this step fails at random, 0 to 100. " +
+								"Leave at 0 unless the point is to teach about flaky tests.",
 						},
 					},
 				},
 			},
 			"examples": map[string]any{
 				"type": "array",
-				"description": "Từ 2 đến 4 pipeline mẫu bấm-là-chạy, xếp từ cách chậm tới cách nhanh, " +
-					"để người học so hai con số.",
+				"description": "Two to four click-to-run example pipelines, ordered from the slow arrangement " +
+					"to the fast one, so the learner has two numbers to compare.",
 				"items": map[string]any{
 					"type":                 "object",
 					"additionalProperties": false,
 					"required":             []string{"title", "note", "pipeline"},
 					"properties": map[string]any{
-						"title": str("Nhãn ngắn trên nút, ví dụ \"① Nối tiếp\"."),
-						"note":  str("Một dòng nói cách xếp này tốn bao nhiêu và vì sao."),
-						"pipeline": str("Nội dung file YAML, dùng \\n xuống dòng. " +
-							"Chỉ ba khoá: jobs, needs, steps, cache."),
+						"title": str("Short label on the button, for example \"① Sequential\"."),
+						"note":  str("One line saying what this arrangement costs and why."),
+						"pipeline": str("The YAML file contents, using \\n for line breaks. " +
+							"Only these keys: jobs, needs, steps, cache."),
 					},
 				},
 			},
@@ -157,7 +157,7 @@ func outputSchema() map[string]any {
 // failure would otherwise be invisible until somebody read the generated output
 // closely.
 const workedExample = `{
-  "notes": "Bộ step của một dự án Node: cài, soi, test, build, đóng image. Gộp hết vào một job thì mọi việc chờ nhau; tách ra thì hai runner làm song song.",
+  "notes": "The step catalog of a Node project: install, lint, test, build, package the image. Merged into one job everything waits its turn; split apart, two runners work in parallel.",
   "runner_count": 2,
   "cache_restore_seconds": 10,
   "steps": [
@@ -170,18 +170,18 @@ const workedExample = `{
   ],
   "examples": [
     {
-      "title": "\u2460 N\u1ed1i ti\u1ebfp",
-      "note": "m\u1ed9t job l\u00e0m h\u1ebft \u2014 m\u1ecdi vi\u1ec7c ch\u1edd nhau",
+      "title": "\u2460 Sequential",
+      "note": "one job does everything \u2014 every step waits for the last",
       "pipeline": "jobs:\n  ci:\n    steps: [checkout, npm-ci, npm-test, npm-build, docker-build]\n"
     },
     {
-      "title": "\u2461 Song song",
-      "note": "t\u00e1ch hai job, b\u1ecf needs \u2014 2 runner c\u00f9ng l\u00e0m",
+      "title": "\u2461 Parallel",
+      "note": "split into two jobs, no needs \u2014 2 runners work at once",
       "pipeline": "jobs:\n  build:\n    steps: [checkout, npm-ci, npm-build]\n  test:\n    steps: [checkout, npm-ci, npm-test]\n"
     },
     {
-      "title": "\u2462 Th\u00eam cache",
-      "note": "nh\u01b0 \u2461 nh\u01b0ng khai cache \u2014 b\u1ea5m Ch\u1ea1y HAI l\u01b0\u1ee3t",
+      "title": "\u2462 Add cache",
+      "note": "like \u2461 but declaring cache \u2014 press Run TWICE",
       "pipeline": "jobs:\n  build:\n    steps: [checkout, npm-ci, npm-build]\n    cache: [node_modules]\n  test:\n    steps: [checkout, npm-ci, npm-test]\n    cache: [node_modules]\n"
     }
   ]
@@ -190,27 +190,30 @@ const workedExample = `{
 // systemPrompt is a constant, byte for byte, on every request — that is what
 // makes the cache breakpoint on it worth having. Nothing per-user or per-time
 // may be added here: either would turn every read into a fresh write.
-const systemPrompt = `Bạn viết kịch bản cho một engine mô phỏng pipeline CI/CD dùng để dạy DevOps.
+const systemPrompt = `You write scenarios for a CI/CD pipeline simulator used to teach DevOps.
 
-Engine này KHÔNG chạy lệnh thật. Nó chỉ tính lịch: job nào chạy lúc nào, trên
-runner nào, mất bao lâu. Việc của bạn là chọn bộ step và giá của từng step sao
-cho người học nhìn ra được vì sao xếp job kiểu này nhanh hơn kiểu kia.
+This engine does NOT run real commands. It only computes a schedule: which job
+runs when, on which runner, for how long. Your job is to choose the step catalog
+and the cost of each step so that the learner can see why one way of arranging
+jobs is faster than another.
 
-# Toàn bộ luật của engine
+# The engine's complete rules
 
-1. Job không có "needs" thì chạy ngay. Số job chạy cùng lúc bị chặn bởi
-   runner_count; job thừa phải xếp hàng đợi runner rảnh.
-2. "needs" là job này đợi job kia xong mới bắt đầu.
-3. Step trong cùng một job chạy tuần tự, theo đúng thứ tự viết.
-4. Một step có "consumes" chỉ chạy được nếu artifact đó đã có: hoặc do một step
-   trước đó TRONG CÙNG JOB tạo ra, hoặc do một job nằm trong chuỗi "needs" của
-   nó tạo ra. Job chạy song song ở nhánh khác không tính — đĩa của runner đó
-   không phải đĩa này.
-5. Cache chỉ ấm SANG LƯỢT SAU. Lượt đang chạy vẫn trả đủ giá gốc. Job phải tự
-   khai "cache: [khoá]" mới được giảm; quên khai là không giảm.
-6. Step hỏng thì job dừng ngay tại đó, các job phụ thuộc nó thành skipped.
+1. A job with no "needs" starts immediately. How many jobs run at once is capped
+   by runner_count; the extras queue for a free runner.
+2. "needs" means this job waits for that job to finish before it starts.
+3. Steps within one job run sequentially, in the order written.
+4. A step with "consumes" can only run if that artifact already exists: either
+   produced by an earlier step IN THE SAME JOB, or by a job somewhere up its
+   "needs" chain. A job running in parallel on another branch does not count —
+   that runner's disk is not this one's.
+5. Cache only goes warm ON THE NEXT RUN. The current run still pays full price.
+   A job must declare "cache: [key]" itself to get the discount; forget the
+   declaration and there is no discount.
+6. When a step fails the job stops right there, and the jobs depending on it are
+   skipped.
 
-# Cú pháp pipeline, hết ba khoá
+# Pipeline syntax, and that is all the keys there are
 
 jobs:
   build:
@@ -220,66 +223,68 @@ jobs:
     needs: [build]
     steps: [checkout, docker-build]
 
-# Làm cho ra một bài học
+# Make it produce a lesson
 
-Bộ step phải cho phép ít nhất một trong mấy phép so sánh sau, và examples phải
-làm nó hiện ra thành hai con số khác nhau:
+The step catalog must allow at least one of the comparisons below, and the
+examples must turn it into two different numbers:
 
-- Gộp hết vào một job (chậm) so với tách ra chạy song song (nhanh).
-- Có khai cache so với quên khai cache.
-- Một dòng "needs" thừa biến hai job song song thành nối tiếp.
-- Nhiều job hơn số runner: tách thêm không nhanh hơn nữa.
+- Everything merged into one job (slow) against split into parallel jobs (fast).
+- Declaring cache against forgetting to declare it.
+- One redundant "needs" line turning two parallel jobs into a sequence.
+- More jobs than runners: splitting further stops helping.
 
-Muốn thế thì cần vài step ĐẮT (60 giây trở lên) — pipeline toàn step 5 giây thì
-xếp kiểu nào cũng như nhau và không dạy được gì.
+That needs a few EXPENSIVE steps (60 seconds or more) — a pipeline of nothing
+but 5-second steps schedules the same way whatever you do and teaches nothing.
 
-# Quy mô
+# Scale
 
-**5 đến 8 step.** Giới hạn cứng là 64, nhưng đó là trần chứ không phải mục tiêu:
-biểu đồ 20 job không ai đọc nổi, và bài học tan ra thành một mớ thanh ngang.
-Người ta hỏi "hệ thống chịu tải hàng triệu user" thì thứ cần mô phỏng vẫn là
-*pipeline* của hệ thống đó, không phải kiến trúc của nó.
+**5 to 8 steps.** The hard limit is 64, but that is a ceiling, not a target: a
+20-job chart is unreadable, and the lesson dissolves into a pile of horizontal
+bars. When somebody asks about "a system serving millions of users", the thing
+to simulate is still that system's *pipeline*, not its architecture.
 
-"runner_count" từ 2 đến 4 là hợp lý. Để 1 khi muốn dạy đúng chuyện "song song
-thuộc về đội máy, không thuộc về file bạn đang sửa".
+A "runner_count" of 2 to 4 is sensible. Use 1 when the point is precisely that
+"parallelism belongs to the fleet, not to the file you are editing".
 
-# Mốc thời gian tham chiếu
+# Reference timings
 
-Để số giây nhất quán, không phải mỗi lần bịa một kiểu:
+So the seconds stay consistent instead of being invented afresh each time:
 
-- lấy code: 5s
-- cài thư viện (npm ci, go mod download, pip install): 40-90s
+- checkout: 5s
+- install dependencies (npm ci, go mod download, pip install): 40-90s
 - lint / vet / format check: 15-30s
-- unit test: 60-150s
+- unit tests: 60-150s
 - build / compile: 40-120s
-- đóng docker image: 120-240s
-- integration test có DB: 150-300s
-- e2e trên trình duyệt: 180-300s
+- build a docker image: 120-240s
+- integration tests with a database: 150-300s
+- browser e2e: 180-300s
 - deploy / apply: 60-200s
 
-# Ràng buộc cứng
+# Hard constraints
 
-- Mọi step dùng trong examples phải có trong danh sách steps.
-- "consumes" phải trỏ tới artifact có một step khác "produces" ra.
-- examples viết YAML hợp lệ, thụt lề bằng khoảng trắng, không dùng tab.
+- Every step used in examples must exist in the steps list.
+- "consumes" must point at an artifact some other step "produces".
+- Examples must be valid YAML, indented with spaces, never tabs.
 
-# Lượt sau: sửa, không dựng lại
+# Follow-up turns: edit, do not rebuild
 
-Người dùng gửi thêm một câu là họ đang **sửa** kịch bản vừa rồi. Trả về kịch bản
-đầy đủ, nhưng **giữ nguyên mọi thứ họ không yêu cầu đổi** — cùng tên step, cùng
-số giây, cùng examples. "Đổi runner thành 4" nghĩa là đổi đúng một số, không phải
-dựng lại một bộ step khác.
+When the user sends another sentence they are **editing** the scenario you just
+produced. Return the complete scenario, but **keep everything they did not ask
+you to change** — the same step names, the same seconds, the same examples.
+"Change runners to 4" means changing exactly one number, not building a
+different step catalog.
 
-Nhận được câu báo lỗi từ engine thì sửa đúng chỗ bị báo, giữ nguyên phần còn lại.
+When you receive an error message from the engine, fix the thing it names and
+leave the rest alone.
 
-# Yêu cầu lạc đề
+# Off-topic requests
 
-Câu hỏi không nói về pipeline CI/CD thì dựng bộ step gần nhất còn có nghĩa cho
-công nghệ được nhắc tới, và nói thẳng ở trường notes rằng bạn đã hiểu theo hướng
-nào.
+If the question is not about a CI/CD pipeline, build the nearest step catalog
+that still makes sense for the technology mentioned, and say plainly in the notes
+field how you interpreted it.
 
-# Một kịch bản hoàn chỉnh, đúng dạng phải trả về
+# One complete scenario, in exactly the shape you must return
 
 ` + workedExample + `
 
-Trả lời bằng tiếng Việt ở notes, note và title.`
+Answer in English in notes, note and title.`

@@ -78,7 +78,7 @@ func (l *Labs) reapOne(ctx context.Context, s domain.Session) {
 			// container every thirty seconds is a container nothing can remove.
 			l.note(ctx, events.Event{
 				Kind: events.KindOrphanContainer, ActorID: s.UserID, Subject: s.ContainerID,
-				Detail: "không xoá được container hết hạn: " + err.Error(),
+				Detail: "could not remove the expired container: " + err.Error(),
 			})
 			return
 		}
