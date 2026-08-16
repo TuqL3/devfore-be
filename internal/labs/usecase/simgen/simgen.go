@@ -35,16 +35,16 @@ const (
 )
 
 var (
-	ErrEmptyPrompt = errors.New("chưa nhập yêu cầu")
-	ErrPromptLong  = fmt.Errorf("yêu cầu dài hơn %d ký tự cho phép", MaxPromptChars)
+	ErrEmptyPrompt = errors.New("no request was entered")
+	ErrPromptLong  = fmt.Errorf("the request is longer than the %d characters allowed", MaxPromptChars)
 	// ErrUnusable is the model failing to produce something the engine accepts
 	// even after being told exactly what was wrong. Distinct from a transport
 	// error: nothing is down, the answer is just not usable.
-	ErrUnusable = errors.New("không dựng được kịch bản chạy được")
+	ErrUnusable = errors.New("could not build a scenario that runs")
 	// ErrDisabled is this deployment having no API key. Owned here rather than
 	// re-exported from the adapter so the usecase can refuse before it charges,
 	// without importing the transport.
-	ErrDisabled = errors.New("tính năng chưa được bật")
+	ErrDisabled = errors.New("the feature is not enabled")
 )
 
 // Generator is the model, as much of it as this package needs.
@@ -80,7 +80,7 @@ func New(gen Generator, quota Quota) *Simgen { return &Simgen{gen: gen, quota: q
 type Input struct {
 	Prompt string
 	// History alternates user and assistant turns. Assistant turns carry the
-	// JSON produced last time, which is what makes "đổi runner thành 4" mean
+	// JSON produced last time, which is what makes "change runners to 4" mean
 	// something rather than starting over.
 	History []Turn
 }
@@ -136,8 +136,8 @@ func (s *Simgen) Generate(ctx context.Context, userID int64, in Input) (*Result,
 		// person to act on, and the model acts on them the same way.
 		turns = append(turns,
 			Turn{Assistant: true, Text: string(raw)},
-			Turn{Text: "Kịch bản trên chưa chạy được. Engine báo: " + err.Error() +
-				"\nSửa lại và trả về kịch bản hoàn chỉnh."},
+			Turn{Text: "The scenario above does not run. The engine reports: " + err.Error() +
+				"\nFix it and return the complete scenario."},
 		)
 	}
 	return nil, fmt.Errorf("%w: %v", ErrUnusable, lastErr)
@@ -159,14 +159,14 @@ func verify(sc *domain.Scenario) error {
 		return err
 	}
 	if len(sc.Examples) == 0 {
-		return errors.New("kịch bản không có ví dụ nào")
+		return errors.New("the scenario has no examples")
 	}
 	for _, ex := range sc.Examples {
 		// Parsed, not run to green. An example that ends red on purpose — a
 		// migration that always fails, a flaky step — is a legitimate lesson;
 		// an example that does not parse is a broken button.
 		if _, err := sim.Parse(ex.Pipeline, sc); err != nil {
-			return fmt.Errorf("ví dụ %q: %w", ex.Title, err)
+			return fmt.Errorf("example %q: %w", ex.Title, err)
 		}
 	}
 	return nil

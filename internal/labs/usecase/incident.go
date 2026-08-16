@@ -80,9 +80,9 @@ func (l *Labs) applyIncident(
 	out, code, err := l.runtime.Exec(runCtx, s.ContainerID, []string{"/bin/sh", "-c", script})
 	if err != nil {
 		if runCtx.Err() != nil && ctx.Err() == nil {
-			return fmt.Errorf("kịch bản sự cố %d chạy quá %s", inc.ID, incidentTimeout)
+			return fmt.Errorf("incident scenario %d ran longer than %s", inc.ID, incidentTimeout)
 		}
-		return fmt.Errorf("chạy kịch bản sự cố %d: %w", inc.ID, err)
+		return fmt.Errorf("running incident scenario %d: %w", inc.ID, err)
 	}
 	if code != 0 {
 		// The output goes to the log rather than to the student: it is the answer
@@ -94,9 +94,9 @@ func (l *Labs) applyIncident(
 		// a break script should be quotable from.
 		l.note(ctx, events.Event{
 			Kind: events.KindIncidentFailed, ActorID: s.UserID, Subject: spec.LabSlug,
-			Detail: fmt.Sprintf("kịch bản %d thoát với mã %d — học viên không mở được ca này", inc.ID, code),
+			Detail: fmt.Sprintf("scenario %d exited with code %d — the learner cannot open this shift", inc.ID, code),
 		})
-		return fmt.Errorf("kịch bản sự cố %d thoát với mã %d", inc.ID, code)
+		return fmt.Errorf("incident scenario %d exited with code %d", inc.ID, code)
 	}
 
 	if err := l.repo.SetIncident(ctx, s.ID, inc.ID); err != nil {
@@ -139,7 +139,7 @@ func (l *Labs) captureCommandLog(ctx context.Context, s *domain.Session) {
 		l.note(ctx, events.Event{
 			Kind: events.KindHistoryLost, Severity: events.SeverityWarn,
 			ActorID: s.UserID, Subject: s.ID,
-			Detail: "không lưu được dòng thời gian của ca trực: " + err.Error(),
+			Detail: "could not save the drill timeline: " + err.Error(),
 		})
 	}
 }

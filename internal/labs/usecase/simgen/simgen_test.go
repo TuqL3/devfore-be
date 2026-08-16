@@ -146,7 +146,7 @@ func TestGenerateRejectsDuplicateStepNames(t *testing.T) {
 		`{"name":"npm-build","seconds":60`, `{"name":"checkout","seconds":60`, 1)
 
 	_, err, _ := run(t, dup, dup)
-	if !errors.Is(err, ErrUnusable) || !strings.Contains(err.Error(), "hai lần") {
+	if !errors.Is(err, ErrUnusable) || !strings.Contains(err.Error(), "declared twice") {
 		t.Fatalf("want a duplicate-name rejection, got %v", err)
 	}
 }
@@ -266,13 +266,13 @@ func TestWorkedExampleIsRunnable(t *testing.T) {
 // the request still succeeds and the answers just get worse.
 func TestSystemPromptCarriesItsParts(t *testing.T) {
 	for _, want := range []string{
-		"5 đến 8 step",                            // quy mô
-		"Mốc thời gian tham chiếu",                // số giây nhất quán
-		"giữ nguyên mọi thứ họ không yêu cầu đổi", // luật cho lượt sau
-		"docker-build",                            // ví dụ mẫu đã được ghép vào
+		"5 to 8 steps",                     // scale
+		"Reference timings",                // consistent seconds
+		"keep everything they did not ask", // the follow-up-turn rule
+		"docker-build",                     // the worked example was spliced in
 	} {
 		if !strings.Contains(systemPrompt, want) {
-			t.Errorf("system prompt thiếu %q", want)
+			t.Errorf("system prompt is missing %q", want)
 		}
 	}
 }

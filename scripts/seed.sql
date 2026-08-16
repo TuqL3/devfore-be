@@ -2244,73 +2244,75 @@ WHERE l.slug = 'cicd-lab-1'
 AND NOT EXISTS (SELECT 1 FROM lab_tasks t WHERE t.lab_id = l.id AND t.order_idx = v.idx);
 
 -- ===========================================================================
--- TRỰC SỰ CỐ
+-- WAR ROOM
 --
--- Lab ở đây ngược chiều mọi lab khác: container mở ra là đã hỏng sẵn, và việc
--- của học viên là tìm ra vì sao rồi cứu nó. Một lab mang nhiều kịch bản, mỗi
--- phiên bốc ngẫu nhiên một cái — nên chơi lại là một ca trực khác, không phải
--- một bài đã thuộc.
+-- The lab here runs against the grain of every other lab: the container opens
+-- already broken, and the learner's job is to work out why and rescue it. One
+-- lab carries several scenarios and each session draws one at random — so
+-- replaying is a different shift, not a lesson already memorised.
 --
--- Ba kịch bản dưới đây phá **cùng một dịch vụ** theo ba cách. Đó là điều kiện
--- để chúng dùng chung một câu hỏi và một check_script: thứ học viên thấy luôn
--- giống nhau — /healthz không trả `ok` — chỉ nguyên nhân là khác.
+-- The three scenarios below break **the same service** in three ways. That is
+-- what lets them share one question and one check_script: what the learner sees
+-- is always the same — /healthz does not answer `ok` — only the cause differs.
 -- ===========================================================================
 
--- Không có khoá nào ở đây, và đó là điểm chính. Từ migration 000028
--- `labs.course_id` nhận NULL, nên một thử thách không phải trú nhờ dưới một khoá
--- giả nữa — bản seed trước có một khoá tên 'truc-su-co' mà chính mô tả của nó
--- viết "không phải khoá học", và 000029 đã xoá nó đi.
+-- There is no course here, and that is the point. Since migration 000028
+-- `labs.course_id` accepts NULL, so a drill no longer has to shelter under a
+-- fake course — the previous seed had a course named 'truc-su-co' whose own
+-- description said "not a course", and 000029 deleted it.
 --
--- Hệ quả có thật, không chỉ là dọn dẹp: `Start` không hỏi đăng ký, `SpecBySlug`
--- không hỏi khoá đã đăng chưa, và `Record` không ghi `course_scores` — thử thách
--- trả về bản tường trình, không trả về điểm của khoá nào.
+-- The consequence is real, not just tidiness: `Start` does not ask about
+-- enrolment, `SpecBySlug` does not ask whether the course was enrolled in, and
+-- `Record` does not write `course_scores` — a drill returns a report, not a
+-- score in some course.
 
--- incident_setup dựng dịch vụ; kịch bản phá nó ngay sau đó, trong cùng một
--- shell dưới `set -e`. Ở lab chứ không ở từng kịch bản: cả ba phá chung một
--- dịch vụ, chép setup ba lần là ba chỗ để trôi khác nhau.
+-- incident_setup brings the service up; the scenario breaks it immediately
+-- afterwards, in the same shell under `set -e`. It lives on the lab rather than
+-- on each scenario: all three break the same service, and copying the setup
+-- three times is three places for it to drift apart.
 INSERT INTO labs (course_id, slug, title, description_md, duration_minutes,
                   lab_image_id, incident_setup, order_idx, drill_status)
 SELECT NULL, v.slug, v.title, v.body, v.minutes,
        (SELECT id FROM lab_images WHERE name = 'devforge/net' AND tag = 'latest'),
        v.setup, v.idx, 'published'
 FROM (VALUES
-    ('incident-lab-1', 'Ca Trực Đầu Tiên', 15, 0, $md$**23:41.** Điện thoại rung. Trang chủ trả lỗi, khách đang kêu trên mạng xã hội.
+    ('incident-lab-1', 'First Shift', 15, 0, $md$**23:41.** The phone buzzes. The homepage is returning errors and customers are complaining on social media.
 
-Bạn chỉ biết chừng đó — đúng như lúc trực thật.
+That is all you know — exactly like a real shift.
 
-### Việc của bạn
+### Your job
 
-Dịch vụ web chạy ở `http://127.0.0.1:8080`, và nó có một đường
-`/healthz` trả về đúng chữ `ok` khi mọi thứ bình thường:
+The web service runs at `http://127.0.0.1:8080`, and it has a `/healthz` route
+that returns exactly the word `ok` when everything is fine:
 
 ```sh
 curl -i http://127.0.0.1:8080/healthz
 ```
 
-Làm cho câu lệnh đó trả `ok` trở lại. Xong thì bấm **Kiểm tra** — đó cũng là lúc
-đồng hồ sự cố dừng, nên đừng sửa xong rồi ngồi đọc tiếp.
+Make that command answer `ok` again. Then press **Check** — that is also when the
+incident clock stops, so do not finish the fix and then sit reading.
 
-### Không ai nói bạn hỏng ở đâu
+### Nobody tells you where it is broken
 
-Cố ý. Mò ra hỏng ở đâu **là** bài học; biết trước thì phần còn lại chỉ là gõ.
-Mấy chỗ đáng nhìn trước:
+Deliberately. Finding out where it broke **is** the lesson; knowing up front
+turns the rest into typing. Places worth looking first:
 
 ```sh
-curl -v http://127.0.0.1:8080/healthz   # nó im lặng, hay nó trả lỗi?
-ss -ltn                                  # có ai đang giữ cổng 8080 không?
-ps aux                                   # tiến trình nào đang chạy, chạy với tham số gì?
-ls -l ~/web                              # file còn đó không, quyền còn đọc được không?
+curl -v http://127.0.0.1:8080/healthz   # is it silent, or does it return an error?
+ss -ltn                                  # is anything holding port 8080?
+ps aux                                   # which processes are running, with which arguments?
+ls -l ~/web                              # are the files still there, still readable?
 ```
 
-Dịch vụ được dựng bằng `httpd` của busybox, phục vụ thư mục `~/web`:
+The service is a busybox `httpd` serving the `~/web` directory:
 
 ```sh
 httpd -p 127.0.0.1:8080 -h ~/web
 ```
 
-> Mọi lệnh bạn gõ trong phiên này được ghi lại, và hiện ở trang kết quả sau khi
-> kết thúc — để bạn thấy mình đã mất bao lâu ở hướng nào. Chỉ bạn và quản trị
-> viên đọc được, và nó mất cùng lúc với phiên.$md$,
+> Every command you type in this session is recorded and shown on the results
+> page afterwards — so you can see how long you spent down each path. Only you
+> and an administrator can read it, and it disappears with the session.$md$,
      $sh$mkdir -p "$HOME/web"
 printf 'chao devforge\n' > "$HOME/web/index.html"
 printf 'ok\n' > "$HOME/web/healthz"
@@ -2318,87 +2320,95 @@ httpd -p 127.0.0.1:8080 -h "$HOME/web"$sh$)
 ) AS v(slug, title, minutes, idx, body, setup)
 WHERE NOT EXISTS (SELECT 1 FROM labs l WHERE l.slug = v.slug);
 
--- Một câu hỏi duy nhất, và nó là câu hỏi của cả ba kịch bản: dịch vụ sống lại
--- chưa. Không hỏi "nguyên nhân là gì" — cái đó hiện ở trang kết quả sau khi
--- xong, chứ hỏi trong lúc làm thì nó thành đáp án trắc nghiệm cho chính bài.
+-- A single question, and it is the question for all three scenarios: is the
+-- service back. It does not ask "what was the cause" — that appears on the
+-- results page afterwards; asking it during the run would turn it into a
+-- multiple-choice answer to the exercise itself.
 INSERT INTO lab_tasks (lab_id, title, hint, points, kind, check_script, expected_commands, options, order_idx)
 SELECT l.id, v.title, v.hint, 20, 'script', v.script, '', '[]'::jsonb, v.idx
 FROM labs l
 JOIN (VALUES
-    (0, 'Khôi phục dịch vụ: /healthz ở cổng 8080 trả về ok',
-     'Ba câu hỏi theo thứ tự đó: có ai nghe ở cổng 8080 không (ss -ltn), tiến trình đang nghe là cái gì và trỏ vào đâu (ps aux), thư mục nó phục vụ còn đọc được không (ls -l ~/web).',
+    (0, 'Restore the service: /healthz on port 8080 returns ok',
+     'Three questions, in that order: is anything listening on port 8080 (ss -ltn), what is the listening process and where does it point (ps aux), is the directory it serves still readable (ls -l ~/web).',
      'curl -fsS --max-time 5 http://127.0.0.1:8080/healthz | grep -q ok')
 ) AS v(idx, title, hint, script) ON true
 WHERE l.slug = 'incident-lab-1'
 AND NOT EXISTS (SELECT 1 FROM lab_tasks t WHERE t.lab_id = l.id AND t.order_idx = v.idx);
 
--- Ba kịch bản. `rps` cố tình giống nhau ở cả ba: ba con số khác nhau biến thanh
--- đếm request hỏng thành vân tay nhận diện kịch bản ngay giây đầu tiên.
+-- Three scenarios. `rps` is deliberately the same on all three: three different
+-- numbers would turn the failed-request counter into a fingerprint identifying
+-- the scenario in the first second.
 --
--- Mỗi break_script chạy sau setup, nên dịch vụ lúc đó đang chạy tốt.
+-- Each break_script runs after the setup, so the service is healthy at that point.
 INSERT INTO lab_incidents (lab_id, title, break_script, reveal_md, rps)
 SELECT l.id, v.title, v.script, v.reveal, 20
 FROM labs l
 JOIN (VALUES
-    ('Tiến trình web đã chết',
+    ('The web process died',
      $sh$pkill httpd$sh$,
-     $md$### Tiến trình `httpd` không còn chạy
+     $md$### The `httpd` process is no longer running
 
-Không ai nghe ở cổng 8080 cả, nên `curl` báo **Failed to connect** chứ không trả
-về mã lỗi HTTP nào. Đó là dấu hiệu tách bạch nhất trong ba kịch bản: hỏng ở tầng
-kết nối, không phải ở tầng ứng dụng.
+Nothing is listening on port 8080, so `curl` reports **Failed to connect** rather
+than returning an HTTP status code. That is the cleanest signal of the three
+scenarios: the break is at the connection layer, not the application layer.
 
-Đường tìm ra: `ss -ltn` không thấy dòng nào cho 8080, `ps aux` không thấy
-`httpd`. Sửa bằng cách chạy lại nó:
+How to find it: `ss -ltn` shows no line for 8080, `ps aux` shows no `httpd`. Fix
+it by starting it again:
 
 ```sh
 httpd -p 127.0.0.1:8080 -h ~/web
 ```
 
-Ngoài đời không ai chạy tay như vậy — process manager (systemd, supervisor,
-container restart policy) tự bật lại. Câu hỏi thật khi gặp cảnh này là **vì sao
-nó chết**, và câu trả lời gần như luôn nằm trong log hoặc trong OOM killer.$md$),
+In the real world nobody starts it by hand — a process manager (systemd,
+supervisor, a container restart policy) brings it back. The real question when
+you hit this is **why it died**, and the answer is almost always in the logs or
+in the OOM killer.$md$),
 
-    ('Tiến trình khác đang giữ cổng 8080',
+    ('Another process is holding port 8080',
      $sh$pkill httpd
 mkdir -p "$HOME/old-release"
-printf 'ban cu, khong co healthz\n' > "$HOME/old-release/index.html"
+printf 'old release, no healthz\n' > "$HOME/old-release/index.html"
 httpd -p 127.0.0.1:8080 -h "$HOME/old-release"$sh$,
-     $md$### Cổng 8080 bị một `httpd` khác chiếm, và nó phục vụ nhầm thư mục
+     $md$### Port 8080 is taken by a different `httpd`, serving the wrong directory
 
-Cổng vẫn có người nghe, nên `curl` **kết nối được** — chỉ là `/healthz` trả
-**404**. Một dịch vụ trả lời sai khác hẳn một dịch vụ không trả lời, và đó là
-thứ phân biệt kịch bản này với kịch bản "tiến trình đã chết".
+Something is listening on the port, so `curl` **connects** — it is `/healthz`
+that returns **404**. A service answering wrongly is a very different thing from
+a service not answering at all, and that is what separates this scenario from
+"the process died".
 
-Đường tìm ra: `ss -ltn` thấy 8080 đang LISTEN, `ps aux` thấy `httpd` chạy với
-`-h /home/student/old-release` — sai thư mục. Sửa: giết nó rồi bật lại đúng chỗ.
+How to find it: `ss -ltn` shows 8080 LISTEN, `ps aux` shows `httpd` running with
+`-h /home/student/old-release` — the wrong directory. Fix: kill it and start it
+again in the right place.
 
 ```sh
 pkill httpd
 httpd -p 127.0.0.1:8080 -h ~/web
 ```
 
-Ngoài đời đây là cảnh deploy hụt: bản cũ chưa tắt hẳn, bản mới không gắn được
-cổng nên chết ngay lúc khởi động, và thứ đang phục vụ khách là bản đáng lẽ đã bị
-thay. Bài học: **cổng có người nghe không có nghĩa là đúng người đang nghe.**$md$),
+In the real world this is a half-finished deploy: the old release never fully
+stopped, the new one could not bind the port and died on startup, and what is
+serving customers is the release that was supposed to have been replaced. The
+lesson: **a port having a listener does not mean the right listener.**$md$),
 
-    ('Thư mục web mất quyền đọc',
+    ('The web directory lost read permission',
      $sh$chmod 000 "$HOME/web"$sh$,
-     $md$### `~/web` bị `chmod 000`
+     $md$### `~/web` was hit with `chmod 000`
 
-`httpd` vẫn chạy, cổng vẫn LISTEN, nhưng nó không mở nổi file trong thư mục nên
-mọi đường dẫn đều ra **404** — kể cả `/index.html` vốn vẫn nằm nguyên đó.
+`httpd` is still running and the port is still LISTEN, but it cannot open any
+file in the directory, so every path returns **404** — including `/index.html`,
+which is still sitting right there.
 
-Đường tìm ra: `ls -ld ~/web` cho ra `d---------`. Sửa:
+How to find it: `ls -ld ~/web` shows `d---------`. Fix:
 
 ```sh
 chmod 755 ~/web
 ```
 
-Chỗ dễ mất thì giờ nhất ở kịch bản này là tin vào mã lỗi: 404 đọc ra là "file
-không tồn tại", nên người ta đi tìm file trước khi nhìn quyền — mà file vẫn ở
-đó. Ngoài đời cảnh này hay tới sau một lệnh `chmod`/`chown` chạy nhầm thư mục,
-hoặc một tiến trình deploy chạy dưới user khác.$md$)
+The easiest way to waste time on this scenario is trusting the status code: 404
+reads as "the file does not exist", so people go looking for the file before
+looking at permissions — and the file is still there. In the real world this
+tends to follow a `chmod`/`chown` run against the wrong directory, or a deploy
+process running as a different user.$md$)
 ) AS v(title, script, reveal) ON true
 WHERE l.slug = 'incident-lab-1'
 AND NOT EXISTS (
