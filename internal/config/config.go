@@ -24,6 +24,23 @@ type Config struct {
 
 	CORSOrigins []string `env:"CORS_ORIGINS" envSeparator:","`
 
+	// Peers allowed to speak for somebody else through X-Forwarded-For. Loopback
+	// only by default, because development has nothing in front of the API and a
+	// header nobody put there must not be believed.
+	//
+	// Production has to name whatever proxy sits in front, and the value is a
+	// deployment fact rather than a constant: Caddy reaches the API across the
+	// compose bridge, so it arrives from 172.16/12, not from loopback. Leave the
+	// default in place there and every request wears Caddy's address instead of
+	// the caller's — the per-address rate limit on the public share routes
+	// collapses into one bucket a single visitor can drain, and audit_logs.ip
+	// records the proxy on every row.
+	//
+	// Never widen this to 0.0.0.0/0. Trusting every peer means the caller picks
+	// their own address by sending the header, which is the rate limit and the
+	// audit trail handed over to whoever asks for them.
+	TrustedProxies []string `env:"TRUSTED_PROXIES" envSeparator:"," envDefault:"127.0.0.1,::1"`
+
 	CookieDomain string `env:"COOKIE_DOMAIN"`
 
 	JWTSecret          string        `env:"JWT_SECRET,required"`

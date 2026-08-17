@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"log/slog"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -19,7 +22,7 @@ import (
 func newRouter(cfg *config.Config, sqlDB *sql.DB, authMod *auth.Module, coursesMod *courses.Module, labsMod *labs.Module, chatMod *chat.Module, auditRec *audit.Recorder) (*gin.Engine, error) {
 	r := gin.New()
 
-	if err := r.SetTrustedProxies([]string{"127.0.0.1", "::1"}); err != nil {
+	if err := setTrustedProxies(r, cfg.TrustedProxies); err != nil {
 		return nil, err
 	}
 	r.Use(gin.Recovery(), requestLog(), cors(cfg.CORSOrigins))
@@ -38,6 +41,29 @@ func newRouter(cfg *config.Config, sqlDB *sql.DB, authMod *auth.Module, coursesM
 	chatMod.AdminRoutes(api, authMod.Required(), authMod.AdminOnly())
 
 	return r, nil
+}
+
+// setTrustedProxies decides whose X-Forwarded-For the server is willing to
+// believe. Everything that identifies a caller reads c.ClientIP() — the
+// per-address rate limit on the public share routes, audit_logs.ip, and the
+// address shown on the logged-in-devices screen — so this is the one place that
+// decides whether those three are about the caller or about the proxy.
+//
+// It comes from configuration rather than a constant because the answer changes
+// with the deployment: nothing sits in front in development, Caddy does in
+// production. See TRUSTED_PROXIES in .env.example.
+func setTrustedProxies(r *gin.Engine, proxies []string) error {
+	if err := r.SetTrustedProxies(proxies); err != nil {
+		return fmt.Errorf("trusted proxies: %w", err)
+	}
+	// Warn rather than refuse: a server that will not boot over a proxy setting
+	// takes the site down in the wrong direction. The operator still gets told
+	// what they gave away.
+	if slices.Contains(proxies, "0.0.0.0/0") || slices.Contains(proxies, "::/0") {
+		slog.Warn("TRUSTED_PROXIES trusts every peer",
+			"consequence", "X-Forwarded-For is caller-controlled: the per-address rate limit and audit_logs.ip can be forged")
+	}
+	return nil
 }
 
 func registerProbes(r *gin.Engine, sqlDB *sql.DB) {
