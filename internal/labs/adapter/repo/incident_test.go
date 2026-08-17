@@ -21,8 +21,7 @@ func TestPickIncidentDrawsEveryLiveScenarioAndNoRetiredOne(t *testing.T) {
 	ctx := context.Background()
 	r := NewSessionRepo(db)
 
-	labID, courseID := seedLab(t, db)
-	t.Cleanup(func() { db.Exec(`DELETE FROM courses WHERE id = ?`, courseID) })
+	labID := seedLab(t, db)
 
 	// A lab with no scenarios is an ordinary lab. That answer is what Start
 	// branches on, so it is part of the contract rather than an edge case.
@@ -71,8 +70,7 @@ func TestSessionRemembersWhichIncidentItDrew(t *testing.T) {
 	ctx := context.Background()
 	r := NewSessionRepo(db)
 
-	labID, courseID := seedLab(t, db)
-	t.Cleanup(func() { db.Exec(`DELETE FROM courses WHERE id = ?`, courseID) })
+	labID := seedLab(t, db)
 	incidentID := seedIncident(t, db, labID, "disk full", true)
 
 	suffix := time.Now().UnixNano()
@@ -130,24 +128,23 @@ func TestSessionRemembersWhichIncidentItDrew(t *testing.T) {
 	}
 }
 
-func seedLab(t *testing.T, db *gorm.DB) (labID, courseID int64) {
+// seedLab makes a lab shaped like a real drill lab: no course. That is not a
+// shortcut to skip seeding one — since migration 000028 it is what a drill lab
+// is, and migration 000034 refuses to attach an incident to any lab that does
+// have a course. A helper that seeded a course here would be testing a shape
+// the database no longer accepts.
+func seedLab(t *testing.T, db *gorm.DB) (labID int64) {
 	t.Helper()
 	suffix := time.Now().UnixNano()
 	if err := db.Raw(
-		`INSERT INTO courses (slug, title, description, level, status)
-		 VALUES (?, 'incident test', '', 'beginner', 'draft') RETURNING id`,
-		fmt.Sprintf("incident-test-%d", suffix),
-	).Scan(&courseID).Error; err != nil {
-		t.Fatalf("seed course: %v", err)
-	}
-	if err := db.Raw(
 		`INSERT INTO labs (course_id, slug, title, description_md, duration_minutes)
-		 VALUES (?, ?, 'incident test lab', '', 30) RETURNING id`,
-		courseID, fmt.Sprintf("incident-test-lab-%d", suffix),
+		 VALUES (NULL, ?, 'incident test lab', '', 30) RETURNING id`,
+		fmt.Sprintf("incident-test-lab-%d", suffix),
 	).Scan(&labID).Error; err != nil {
 		t.Fatalf("seed lab: %v", err)
 	}
-	return labID, courseID
+	t.Cleanup(func() { db.Exec(`DELETE FROM labs WHERE id = ?`, labID) })
+	return labID
 }
 
 func seedIncident(t *testing.T, db *gorm.DB, labID int64, title string, active bool) int64 {
