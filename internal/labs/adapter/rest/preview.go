@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -102,5 +103,75 @@ func (h *Handler) SharedDrillPreview(c *gin.Context) {
 		Description: desc,
 		PageURL:     base + "/r/" + d.Token,
 		ImageURL:    api + "/api/shared-drills/" + d.Token + "/og.png",
+	})
+}
+
+// dayBoard parses the `:day` segment and reads that board. The preview page and
+// its picture want exactly the same two steps, and a crawler walking the archive
+// asks for the pair on every day it visits.
+func (h *Handler) dayBoard(c *gin.Context) (*domain.DailyDrill, bool) {
+	day, err := time.ParseInLocation(time.DateOnly, c.Param("day"), time.UTC)
+	if err != nil {
+		abort(c, http.StatusBadRequest, "ngày không hợp lệ")
+		return nil, false
+	}
+	d, err := h.uc.Day(c.Request.Context(), day, time.Now())
+	switch {
+	case errors.Is(err, domain.ErrNoDailyDrill):
+		// Same answer for a day nobody can have: tomorrow, or further back than
+		// the archive reaches. A crawler that walks backwards forever needs a wall
+		// to stop at, and 404 is that wall.
+		abort(c, http.StatusNotFound, "chưa có ca trực nào được xuất bản")
+		return nil, false
+	case err != nil:
+		serverError(c, err)
+		return nil, false
+	}
+	return d, true
+}
+
+// DailyDrillPreview is the same trick as SharedDrillPreview, for the archive
+// instead of one person's report.
+//
+// The back button on the War Room already read old boards, but only into React
+// state — there was no URL to paste, so there was nothing for a crawler to fetch
+// and nothing for a search engine to keep. `/war-room/day/<date>` is that URL,
+// and this is what a crawler gets when it asks for one.
+//
+// The fault is not named here either, for the same reason as the shared report:
+// the board describes a challenge that people are still meant to walk into cold.
+// The lab title says which service broke, not what broke it.
+func (h *Handler) DailyDrillPreview(c *gin.Context) {
+	d, ok := h.dayBoard(c)
+	if !ok {
+		return
+	}
+
+	base := strings.TrimSuffix(h.frontendURL, "/")
+	api := strings.TrimSuffix(h.publicURL, "/")
+	title := "Ca trực " + d.Day
+	desc := d.LabTitle + " — chưa ai cứu được ca này. Thử xem bạn có phải người đầu tiên."
+	if len(d.Leaders) > 0 {
+		top := d.Leaders[0]
+		title = "Ca trực " + d.Day + ": " + top.Player + " nhanh nhất với " + mmss(top.DowntimeSeconds)
+		desc = d.LabTitle + " — " + strconv.Itoa(len(d.Leaders)) +
+			" người đã cứu được ca này. Thử xem bạn nhanh hơn không."
+	}
+
+	// Ten minutes for today's board, which is still collecting names, and a day
+	// for one that has closed. A finished day never changes again, and the crawler
+	// that walks the archive is exactly the client that would refetch it most.
+	maxAge := "600"
+	if d.Day != time.Now().UTC().Format(time.DateOnly) {
+		maxAge = "86400"
+	}
+	c.Header("Cache-Control", "public, max-age="+maxAge)
+	c.Status(http.StatusOK)
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	_ = previewTmpl.Execute(c.Writer, previewData{
+		Title:       title,
+		Description: desc,
+		PageURL:     base + "/war-room/day/" + d.Day,
+		ImageURL:    api + "/api/daily-drill/" + d.Day + "/og.png",
 	})
 }

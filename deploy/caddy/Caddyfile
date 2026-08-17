@@ -1,6 +1,5 @@
 # Local dev: http on :80, không TLS.
 # Prod override ở deploy/Caddyfile.prod (P9).
-
 {
 	auto_https off
 	admin off
@@ -32,10 +31,25 @@
 	# `handle` theo thứ tự viết, và cái bắt-tất-cả nuốt mọi đường dẫn.
 	@crawler {
 		path_regexp share ^/r/([A-Za-z0-9_-]+)/?$
-		header_regexp User-Agent (?i)(facebookexternalhit|twitterbot|slackbot|discordbot|telegrambot|linkedinbot|whatsapp|zalo|skypeuripreview|embedly|quora link preview|pinterest|redditbot|bingbot|googlebot)
+		header_regexp User-Agent "(?i)(facebookexternalhit|twitterbot|slackbot|discordbot|telegrambot|linkedinbot|whatsapp|zalo|skypeuripreview|embedly|quora link preview|pinterest|redditbot|bingbot|googlebot)"
 	}
 	handle @crawler {
 		rewrite * /api/shared-drills/{re.share.1}/preview
+		reverse_proxy api:8080
+	}
+
+	# Cùng lý do, cho kho ca cũ. Nút lùi ngày trước đây chỉ đổi state trong React
+	# nên không có URL nào để dán hay để index; giờ mỗi ngày đã đóng có đường dẫn
+	# riêng, và đây là thứ trình thu thập nhận khi hỏi tới nó.
+	#
+	# Regex ghim đúng dạng YYYY-MM-DD: mọi thứ khác để app tự trả lời, đừng đẩy
+	# rác vào một endpoint sinh ảnh.
+	@daycrawler {
+		path_regexp day ^/war-room/day/(\d{4}-\d{2}-\d{2})/?$
+		header_regexp User-Agent "(?i)(facebookexternalhit|twitterbot|slackbot|discordbot|telegrambot|linkedinbot|whatsapp|zalo|skypeuripreview|embedly|quora link preview|pinterest|redditbot|bingbot|googlebot)"
+	}
+	handle @daycrawler {
+		rewrite * /api/daily-drill/{re.day.1}/preview
 		reverse_proxy api:8080
 	}
 
