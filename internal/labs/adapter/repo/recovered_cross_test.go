@@ -35,8 +35,7 @@ func TestRecoveredMeansTheSameThingInGoAndInSQL(t *testing.T) {
 	ctx := context.Background()
 	r := repo.NewSessionRepo(db)
 
-	labID, courseID, taskIDs := seedDrillLab(t, db, 3)
-	t.Cleanup(func() { db.Exec(`DELETE FROM courses WHERE id = ?`, courseID) })
+	labID, taskIDs := seedDrillLab(t, db, 3)
 	incidentID := seedCrossIncident(t, db, labID)
 	userID := seedCrossUser(t, db)
 	t.Cleanup(func() { db.Exec(`DELETE FROM users WHERE id = ?`, userID) })
@@ -113,8 +112,7 @@ func TestRecoveredMeansTheSameThingInGoAndInSQL(t *testing.T) {
 	// A lab with no tasks at all: SQL divides nothing by nothing, Go iterates an
 	// empty list. Both have to answer "not recovered" — a drill nobody can fail is
 	// not a drill, and the first draft of either could easily have said yes.
-	emptyLabID, emptyCourseID, _ := seedDrillLab(t, db, 0)
-	t.Cleanup(func() { db.Exec(`DELETE FROM courses WHERE id = ?`, emptyCourseID) })
+	emptyLabID, _ := seedDrillLab(t, db, 0)
 	emptyIncident := seedCrossIncident(t, db, emptyLabID)
 	sessionID := fmt.Sprintf("cross-empty-%d", time.Now().UnixNano())
 	token := "cross-token-" + sessionID
@@ -154,23 +152,19 @@ func crossTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func seedDrillLab(t *testing.T, db *gorm.DB, tasks int) (labID, courseID int64, taskIDs []int64) {
+// A drill lab has no course — that is what it is, since migration 000028, and
+// migration 000034 refuses to attach an incident to a lab that has one.
+func seedDrillLab(t *testing.T, db *gorm.DB, tasks int) (labID int64, taskIDs []int64) {
 	t.Helper()
 	suffix := time.Now().UnixNano()
 	if err := db.Raw(
-		`INSERT INTO courses (slug, title, description, level, status)
-		 VALUES (?, 'cross test', '', 'beginner', 'draft') RETURNING id`,
-		fmt.Sprintf("cross-test-%d", suffix),
-	).Scan(&courseID).Error; err != nil {
-		t.Fatalf("seed course: %v", err)
-	}
-	if err := db.Raw(
 		`INSERT INTO labs (course_id, slug, title, description_md, duration_minutes)
-		 VALUES (?, ?, 'cross test lab', '', 30) RETURNING id`,
-		courseID, fmt.Sprintf("cross-test-lab-%d", suffix),
+		 VALUES (NULL, ?, 'cross test lab', '', 30) RETURNING id`,
+		fmt.Sprintf("cross-test-lab-%d", suffix),
 	).Scan(&labID).Error; err != nil {
 		t.Fatalf("seed lab: %v", err)
 	}
+	t.Cleanup(func() { db.Exec(`DELETE FROM labs WHERE id = ?`, labID) })
 	for i := range tasks {
 		var id int64
 		if err := db.Raw(
@@ -182,7 +176,7 @@ func seedDrillLab(t *testing.T, db *gorm.DB, tasks int) (labID, courseID int64, 
 		}
 		taskIDs = append(taskIDs, id)
 	}
-	return labID, courseID, taskIDs
+	return labID, taskIDs
 }
 
 func seedCrossIncident(t *testing.T, db *gorm.DB, labID int64) int64 {

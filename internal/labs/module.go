@@ -208,6 +208,12 @@ func (m *Module) Routes(r *gin.Engine, api *gin.RouterGroup, required, admin gin
 	// unpublished report stops having a picture as well as a page.
 	api.GET("/shared-drills/:token/preview", limit, h.SharedDrillPreview)
 	api.GET("/shared-drills/:token/og.png", limit, h.SharedDrillOG)
+	// The archive equivalents. `/daily-drill` above answers today's board and
+	// `?day=` reads an old one; these two describe one closed day to a crawler,
+	// which needs the date in the path because that is what the shareable URL
+	// puts there.
+	api.GET("/daily-drill/:day/preview", limit, h.DailyDrillPreview)
+	api.GET("/daily-drill/:day/og.png", limit, h.DailyDrillOG)
 
 	// Outside /api because it is not one: the client opens it with a WebSocket
 	// handshake, and the cookie the middleware reads rides along with it.

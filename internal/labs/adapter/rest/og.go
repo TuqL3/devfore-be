@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/gin-gonic/gin"
@@ -113,6 +114,69 @@ func drawOGCard(d *domain.SharedDrill) image.Image {
 		text(img, 80, 370, 9, ogFG, "HET GIO")
 		text(img, 80, 440, 3, ogMuted, ascii("dich vu van chet khi het gio"))
 		text(img, 80, 545, 3, outcome, clip(strings.ToUpper(ascii(d.Player)), 30))
+	}
+
+	text(img, ogWidth-80-scaledWidth("DEVFORGE", 2), 570, 2, ogMuted, "DEVFORGE")
+	return img
+}
+
+// DailyDrillOG draws the archive card: one closed day of the War Room.
+//
+// Same shape and same primitives as the report card, because the two land side
+// by side in the same timeline and a reader should be able to tell at a glance
+// that they come from the same place.
+func (h *Handler) DailyDrillOG(c *gin.Context) {
+	d, ok := h.dayBoard(c)
+	if !ok {
+		return
+	}
+
+	img := drawDayCard(d)
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		serverError(c, err)
+		return
+	}
+	// A closed day is frozen; today's board still gains names. The picture only
+	// carries the fastest of them, so today's is the one worth re-fetching.
+	maxAge := "600"
+	if d.Day != time.Now().UTC().Format(time.DateOnly) {
+		maxAge = "86400"
+	}
+	c.Header("Cache-Control", "public, max-age="+maxAge)
+	c.Data(http.StatusOK, "image/png", buf.Bytes())
+}
+
+func drawDayCard(d *domain.DailyDrill) image.Image {
+	img := image.NewRGBA(image.Rect(0, 0, ogWidth, ogHeight))
+	fill(img, img.Bounds(), ogBG)
+
+	// Green once somebody got through it, red while the day still stands unbeaten
+	// — the same colour language as the report card, read at the same glance.
+	outcome := ogDanger
+	if len(d.Leaders) > 0 {
+		outcome = ogSuccess
+	}
+	fill(img, image.Rect(0, 0, 14, ogHeight), outcome)
+	fill(img, image.Rect(80, 490, ogWidth-80, 491), ogPanel)
+
+	text(img, 80, 100, 3, ogAccent, "WAR ROOM")
+	text(img, 80, 150, 2, ogMuted, clip(ascii(d.LabTitle), 52))
+
+	// The date is the headline: it is what the link promises and the one thing
+	// that tells two archive cards apart in a feed. Baselines copied from the
+	// report card rather than recomputed — the two must line up.
+	if len(d.Leaders) > 0 {
+		top := d.Leaders[0]
+		text(img, 80, 360, 7, ogFG, d.Day)
+		text(img, 80, 440, 3, ogMuted, ascii("nhanh nhat trong ngay"))
+		text(img, 80, 545, 3, outcome, clip(strings.ToUpper(ascii(top.Player)), 30))
+		text(img, 80, 590, 2, ogMuted, mmss(top.DowntimeSeconds)+" - "+
+			strconv.Itoa(len(d.Leaders))+" nguoi cuu duoc")
+	} else {
+		text(img, 80, 360, 7, ogFG, d.Day)
+		text(img, 80, 440, 3, ogMuted, ascii("chua ai cuu duoc ca nay"))
+		text(img, 80, 545, 3, outcome, "CHUA CO AI")
 	}
 
 	text(img, ogWidth-80-scaledWidth("DEVFORGE", 2), 570, 2, ogMuted, "DEVFORGE")
