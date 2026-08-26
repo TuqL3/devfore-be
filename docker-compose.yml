@@ -34,7 +34,11 @@ services:
   # Catches every mail the app sends and shows it at http://localhost:8025
   # instead of delivering it. Real inboxes stay out of development, and no
   # Gmail app password is needed to see what a signup code actually looks like.
+  # Development only. The profile is what keeps it out of production: the prod
+  # overlay cannot delete a service the base file declares, and a mail catcher
+  # on a public box is a mailbox anyone can read.
   mailpit:
+    profiles: ["dev"]
     image: axllent/mailpit:v1.21
     ports:
       - "127.0.0.1:1025:1025" # SMTP — point SMTP_HOST/SMTP_PORT here

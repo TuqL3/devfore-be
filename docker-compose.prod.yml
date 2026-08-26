@@ -1,0 +1,80 @@
+# Production overlay. Always paired with the base file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# What it adds over the base: the API and the FE actually run as containers
+# (in development both run on the host under air/vite), and Caddy is the only
+# thing on the network with a published port.
+services:
+  # Built on the box, not in Actions. The runner is amd64 and emulating arm64
+  # through QEMU takes ten times longer than four Ampere cores need to compile
+  # a static Go binary. See README §9.2.
+  api:
+    build:
+      context: .
+      target: prod
+    env_file: [.env]
+    environment:
+      # NOT 127.0.0.1 as in development. There the API runs on the host and
+      # loopback is the proxy's published port; here loopback is the API's own
+      # container and the proxy is a service name.
+      LAB_DOCKER_HOST: tcp://docker-proxy:2375
+    volumes:
+      - uploads:/uploads
+    # Nothing published. Caddy reaches this over the bridge, which is also the
+    # precondition for widening TRUSTED_PROXIES to 172.16.0.0/12 (§9.5).
+    expose:
+      - "8080"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      docker-proxy: {condition: service_started}
+    healthcheck:
+      # distroless has no shell and no wget; the binary probes itself.
+      test: ["CMD", "/server", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # Vite bakes VITE_API_URL at build time, so this image is environment-bound
+  # and cannot be the same one development runs. Same domain, path-routed, so
+  # the value is a path and not a host — that is what keeps CORS out of prod.
+  web:
+    build:
+      context: ../devforge-fe
+      target: prod
+      args:
+        VITE_API_URL: https://${DOMAIN}/api
+    expose:
+      - "80"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+      - ./deploy/caddy/Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      # Losing this means re-issuing certs on every restart, and Let's Encrypt
+      # rate-limits that to five per week per domain.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api, web]
+    restart: unless-stopped
+
+  postgres:
+    restart: unless-stopped
+
+  redis:
+    restart: unless-stopped
+
+volumes:
+  uploads:
+  caddy_data:
+  caddy_config:
