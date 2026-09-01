@@ -356,9 +356,11 @@ Container do học viên gõ lệnh = code lạ chạy trên máy chủ. Bắt b
 
 ## 8. Môi trường
 
-**Build 1 lần, chạy mọi nơi — áp dụng cho API (Go).** Cùng image `ghcr.io/<user>/devforge-api:<git-sha>` chạy ở local lẫn prod. Khác nhau chỉ ở env var inject lúc chạy. Không có `Dockerfile.prod` riêng.
+**Một `Dockerfile` cho mọi nơi — áp dụng cho API (Go).** Cùng file build ra image chạy local lẫn prod; khác nhau chỉ ở env var inject lúc chạy. Không có `Dockerfile.prod` riêng.
 
-> **FE khác API:** Vite **bake `VITE_API_URL` lúc build**, không phải runtime. Image FE prod ≠ image FE local → phải build riêng mỗi môi trường (CI truyền `VITE_API_URL` qua `--build-arg`, tag theo git-sha). Không dùng chung 1 image FE cho cả 2 env. Câu "build 1 lần chạy mọi nơi" chỉ đúng cho API.
+Nhưng **image không đi từ máy dev lên prod**: prod build lại từ nguồn ngay trên máy Oracle. Lý do ở §9.2 — runner của GitHub Actions là amd64, giả lập arm64 qua QEMU chậm gấp cả chục lần, trong khi 4 nhân ARM build image alpine trong vài giây. Hệ quả nằm ở rollback, xem ngay dưới bảng.
+
+> **FE khác API:** Vite **bake `VITE_API_URL` lúc build**, không phải runtime. Build FE prod ≠ build FE local → mỗi môi trường một lần build riêng, truyền `VITE_API_URL` qua `--build-arg`. Không dùng chung một image FE cho cả 2 env.
 
 |           | local                          | production                                                              |
 | --------- | ------------------------------ | ----------------------------------------------------------------------- |
@@ -368,9 +370,13 @@ Container do học viên gõ lệnh = code lạ chạy trên máy chủ. Bắt b
 | DB        | postgres container, seed giả   | postgres volume + pg_dump cron → R2                                     |
 | TLS       | không                          | Caddy + Let's Encrypt                                                   |
 | Log       | stdout                         | slog JSON → Grafana Alloy → Grafana Cloud Loki                          |
-| Deploy    | hot reload (`air`, `vite dev`) | GitHub Actions → SSH → `compose pull && up -d`                          |
+| Deploy    | hot reload (`air`, `vite dev`) | GitHub Actions → SSH → `git fetch` + `compose build` + `up -d`          |
 
-Rollback = trỏ về image tag SHA cũ, không revert code rồi build lại.
+Cột production ở trên là đích, không phải hiện trạng: `docker-compose.prod.yml`, `deploy/Caddyfile.prod` và workflow CD **chưa có trên đĩa**. `deploy/` mới chỉ có `caddy/Caddyfile` (bản dev, `:80`, `auto_https off`) và một `monitoring/` rỗng.
+
+**Rollback = checkout SHA cũ rồi build lại, không phải đổi tag.** Vì image sinh ra trên chính máy prod, không có tag cũ nào nằm sẵn ở registry để trỏ về. Giá phải trả: bản lỗi còn phục vụ thêm 1-2 phút trong lúc build.
+
+Muốn rollback tính bằng giây thì đổi sang **self-hosted runner ARM ngay trên máy đó** — build native, push GHCR, rollback thành `IMAGE_TAG=<sha-cũ> compose up -d`. Đánh đổi: thêm một runner phải bảo trì, và runner đó có quyền trên host prod. Chưa làm; ghi ở đây để lần sau không phải suy luận lại.
 
 ### Biến môi trường
 
@@ -380,12 +386,17 @@ Rollback = trỏ về image tag SHA cũ, không revert code rồi build lại.
 | `PORT`                                        | 8080                    | 8080                   | compose    |
 | `LOG_LEVEL`                                   | debug                   | info                   | compose    |
 | `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_NAME` | (compose)               | (compose)              | compose    |
-| `DB_PASSWORD`                                 | `.env` giả              | GitHub Secrets → env   | **secret** |
+| `DB_PASSWORD`                                 | `.env` giả              | env file trên server   | **secret** |
 | `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB`  | localhost:6379          | (compose)              | compose    |
 | `COOKIE_DOMAIN`                               | (rỗng)                  | (rỗng)                 | compose    |
-| `JWT_SECRET`                                  | `.env` giả              | GitHub Secrets → env   | **secret** |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`   | `.env`                  | GitHub Secrets → env   | **secret** |
+| `JWT_SECRET`                                  | `.env` giả              | env file trên server   | **secret** |
+| `ACCESS_TTL` / `REFRESH_TTL`                  | `15m` / `168h`          | `15m` / `168h`         | compose    |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`   | `.env`                  | env file trên server   | **secret** |
+| `GOOGLE_REDIRECT_URL`                         | `http://localhost:8080/api/auth/google/callback` | `https://<domain>/api/auth/google/callback` | compose |
 | `CORS_ORIGINS`                                | `http://localhost:5173` | `https://<domain>`     | compose    |
+| `FRONTEND_URL`                                | `http://localhost:5173` | `https://<domain>`     | compose    |
+| `PUBLIC_URL`                                  | `http://localhost:8080` | `https://<domain>` — **origin trần, không có `/api`** | compose |
+| `UPLOAD_DIR`                                  | `./uploads`             | `./uploads` (bind mount, xem "Domain & routing") | compose |
 | `TRUSTED_PROXIES`                             | `127.0.0.1,::1`         | `127.0.0.1,::1,172.16.0.0/12` — **bắt buộc, xem §9.5** | compose |
 | `DATABASE_URL` (migrate)                      | `sslmode=disable`       | `sslmode=require`      | **secret** |
 | `LAB_DOCKER_HOST`                             | `tcp://127.0.0.1:2375`  | `tcp://127.0.0.1:2375` | compose    |
@@ -395,13 +406,23 @@ Rollback = trỏ về image tag SHA cũ, không revert code rồi build lại.
 | `OPENROUTER_API_KEY`                          | (rỗng)                  | **(rỗng)** — xem §9.6  | **secret** |
 | `OPENROUTER_MODEL`                            | —                       | `anthropic/claude-haiku-4-5` | compose |
 | `AI_DAILY_LIMIT`                              | `10`                    | `3` (xem §9.6)         | compose    |
+| `SMTP_HOST` / `SMTP_PORT`                     | `localhost` / `1025` (Mailpit) | Resend hoặc Brevo / `587` | compose |
+| `SMTP_USER` / `SMTP_PASSWORD`                 | (rỗng — Mailpit không hỏi) | (bắt buộc)          | **secret** |
+| `MAIL_FROM`                                   | `no-reply@devforge.local` | `no-reply@<domain>`  | compose    |
+| `VERIFY_CODE_TTL` / `RESET_TOKEN_TTL` / `RESEND_COOLDOWN` | `10m` / `1h` / `60s` | như local        | compose    |
 | `VITE_API_URL` (FE, **build-time**)           | `http://localhost:8080` | `https://<domain>/api` | build-arg  |
 
-`.env.example` phải liệt kê đủ biến trên (giá trị giả). Secret prod **không bao giờ vào git thô** — chỉ GitHub Secrets, đẩy xuống server thành env file qua bước deploy.
+**Nhóm SMTP là chỗ hỏng im lặng.** Local có Mailpit nuốt mọi thư nên không ai thấy thiếu; prod không có gì đứng thay, và mã xác thực với link reset mật khẩu là hai thứ duy nhất đi qua đường đó. Thiếu `SMTP_HOST` ở prod = người đăng ký mới không bao giờ vào được, không có lỗi nào nổ ở phía server.
+
+`.env.example` phải liệt kê đủ biến trên (giá trị giả).
+
+**Secret prod nằm trong env file trên server, sửa bằng tay — CD không đẩy secret từ GitHub Secrets xuống.** Actions chỉ giữ ba secret để mở được cửa: `SSH_HOST`, `SSH_USER`, `SSH_KEY`. Đổi lại là ba thay vì hơn chục, và không secret prod nào đi ngang qua Actions. Giá phải trả: thêm một biến môi trường nghĩa là một lần ssh, không phải một lần commit — và **file đó không có bản sao ở đâu cả**: `scripts/backup.sh` dump database chứ không dump config. Dựng lại máy từ đầu mà không có bản `.env` trong tay thì phải sinh lại toàn bộ khoá, và mọi phiên đăng nhập hiện có mất theo `JWT_SECRET`.
 
 ### Healthcheck (điều kiện rollback)
 
-Rollback tự động ở CI chỉ chạy được nếu `api` khai báo healthcheck trong compose:
+> ⚠️ **Chưa làm.** `cmd/server/main.go` không đọc `os.Args` và không có `flag` nào — subcommand `healthcheck` chưa tồn tại. Cho tới khi nó có, bước deploy phải tự probe từ ngoài (xem CI/CD bên dưới), và cái compose healthcheck dưới đây là thứ phải viết chứ không phải thứ đang chạy.
+
+Rollback tự động ở CD chỉ chạy được nếu `api` khai báo healthcheck trong compose:
 
 ```yaml
 api:
@@ -414,27 +435,31 @@ api:
 
 Image prod là **distroless (không shell/wget)** → không dùng được `CMD-SHELL "wget ..."`. Phải thêm subcommand `/server healthcheck` vào binary để tự probe `/healthz`.
 
+Trong lúc chưa có, bước deploy kiểm tra từ phía ngoài container thay thế — `curl -fsS https://<domain>/readyz` lặp lại vài lần sau `up -d`. Kém hơn một bậc: nó không phân biệt được "API chưa boot xong" với "Caddy chưa route", nhưng nó không đòi sửa binary.
+
 ### Domain & routing
 
 **1 domain, route bằng path** qua Caddy edge → không CORS ở prod, 1 cert TLS:
 
 ```
-https://<domain>/         → FE static (Caddy serve)
-https://<domain>/api/*    → Go API
-https://<domain>/ws/*     → Go API (WebSocket → wss)
-https://<domain>/uploads/* → Go API — ảnh bìa + avatar
+https://<domain>/          → FE static (Caddy serve)
+https://<domain>/api/*     → Go API
+https://<domain>/ws/*      → Go API (WebSocket → wss)
+https://<domain>/uploads/* → Go API   ← KHÔNG nằm trong /api, xem dưới
+https://<domain>/healthz   → Go API
+https://<domain>/readyz    → Go API
 ```
 
-`/uploads` là `r.Static` trên router gốc, **không** nằm trong group `/api`, và
-`upload.Saver` dựng URL bằng `PUBLIC_URL + "/uploads/" + tên`. Quên dòng này ở
-Caddy thì mọi ảnh đã upload rơi vào SPA và trả index.html. Cùng lý do,
-`PUBLIC_URL` prod là `https://<domain>` — **không có `/api` ở cuối**.
+**`/uploads/*` là cái bẫy của bảng này.** `cmd/server/router.go:32` gắn `r.Static("/uploads", cfg.UploadDir)` lên router gốc, ngoài group `/api`, và `internal/upload/image.go:100` dựng URL bằng `PUBLIC_URL + "/uploads/" + name`. Một Caddyfile chỉ route `/api/*`, `/ws/*` và `/` sẽ đẩy mọi ảnh bìa với avatar vào khối bắt-tất-cả của SPA — SPA trả `index.html` kèm **200**, nên thứ nhìn thấy là ảnh vỡ chứ không phải 404 để mà grep. Hai chỗ phải khớp nhau: route ở Caddy, và `PUBLIC_URL` phải là origin trần (`https://<domain>`), không kèm `/api`.
+
+Thư mục `UPLOAD_DIR` phải là bind mount hoặc volume — nằm trong lớp ghi của container thì mỗi lần `up -d` là mất sạch ảnh đã upload.
 
 Hệ quả khi chốt domain:
 
 - FE build với `VITE_API_URL=https://<domain>/api`, WS dùng `wss://<domain>/ws/...`
 - `CORS_ORIGINS` prod = same-origin → gần như chỉ còn cần cho dev (`:5173`)
-- OAuth: đăng ký redirect `https://<domain>/api/auth/google/callback` ở Google Console + set env
+- OAuth: đăng ký redirect `https://<domain>/api/auth/google/callback` ở Google Console + set `GOOGLE_REDIRECT_URL` khớp từng ký tự
+- `PUBLIC_URL` và `FRONTEND_URL` cùng trỏ `https://<domain>` — cùng origin nên hai biến trùng giá trị ở prod, khác nhau chỉ ở local
 - Caddy auto Let's Encrypt: cần DNS A record trỏ VPS **trước khi** `up`
 
 Không tách `api.` / `app.` subdomain → tránh CORS + cookie cross-site (`SameSite`) rắc rối. Muốn subdomain thì phải bật CORS credentials + set cookie domain — đắt hơn, không cần cho quy mô này.
@@ -451,15 +476,85 @@ Deploy 3:  DROP COLUMN user_name; code chỉ dùng username
 
 ### CI/CD
 
+Hai nửa, và chỉ nửa đầu có thật trên đĩa.
+
+**CI — `.github/workflows/ci.yml`, đang chạy:**
+
 ```
-push branch → lint + test + gitleaks
-            → build image arm64, trivy scan
-            → push GHCR, tag = git SHA
-merge master→ deploy prod qua SSH
-            → health check → đỏ thì rollback tag cũ
+push master | pull_request
+  job be      → gofmt -l | (! grep .)  →  go vet  →  go build  →  go test
+  job secrets → gitleaks (fetch-depth: 0, cần quyền pull-requests: read)
 ```
 
-Nhánh mặc định là `master`. Workflow `ci.yml` hiện chỉ theo dõi `push: [master]` + `pull_request` — trước đó nó theo dõi `main`, nghĩa là mọi lần merge đều vào mà CI không chạy lần nào.
+**CD — chưa có workflow nào.** Không có job build image, không trivy, không push registry, không bước deploy. Đây là hình dạng nó phải có, không phải hiện trạng:
+
+```
+merge master → ssh vào máy Oracle
+             → git fetch && git checkout <sha>
+             → docker compose build            (native arm64, vài giây)
+             → migrate up                      (tương thích ngược, xem trên)
+             → docker compose up -d
+             → curl -fsS https://<domain>/readyz, lặp có timeout
+             → đỏ  → checkout <sha trước> && build && up -d   (1-2 phút)
+```
+
+Ba điều kiện, và không cái nào là tuỳ chọn:
+
+1. **`/readyz` phải trả đỏ khi API chưa nối được DB** — nếu không thì bước kiểm tra luôn xanh và rollback không bao giờ bắn. Cái này **đã có**: `cmd/server/router.go:74` ping database với timeout 2 giây và trả `503` khi ping hỏng. `/healthz` thì luôn `200` — nó chỉ nói tiến trình còn sống, nên **đừng dùng `/healthz` làm điều kiện rollback.**
+2. **Migration chạy trước `up -d`, và phải tương thích ngược.** Rollback chỉ lùi code, không lùi schema — một migration drop cột trong một bước làm binary cũ chạy trên schema nó không đọc được, và lúc đó không còn đường về nào ngoài restore.
+3. **Ba secret `SSH_HOST` / `SSH_USER` / `SSH_KEY`.** Khoá SSH riêng cho deploy, không dùng lại khoá cá nhân, và giới hạn được tới đâu thì giới hạn.
+
+Nhánh mặc định là `master`. `ci.yml` theo dõi `push: [master]` + `pull_request` — trước đó nó theo dõi `main`, nghĩa là mọi lần merge đều vào mà CI không chạy lần nào.
+
+Repo để public thì Actions không giới hạn phút và GHCR không giới hạn dung lượng — xem §9.3.
+
+### Staging — phương án, chưa dựng
+
+Lý do cần nằm ngay trong §9.5: hai lỗi mô tả ở đó *"chỉ nổ sau khi deploy (dev FE gọi thẳng `:8080` nên không thấy)"*. Cùng loại với chúng, và cũng chỉ lộ ra sau khi lên máy thật:
+
+`TRUSTED_PROXIES` sau Caddy · `/uploads/*` với `PUBLIC_URL` · OAuth redirect URI thật · Caddy xin cert Let's Encrypt · `VITE_API_URL` bake lúc build · build arm64 · migration ba bước tương thích ngược · và chính cái rollback.
+
+**Không dựng máy thứ hai.** Always Free là 4 OCPU / 24 GB **tổng cho cả tài khoản**, chia ra hai VM thì prod mất phần — mà §9.4 đã chốt trần của prod là CPU chứ không phải RAM. Cắt một OCPU cho staging là cắt một phần tư sức chứa lab.
+
+Dựng **stack thứ hai trên cùng máy**: compose project khác tên, volume khác, một site block nữa trong Caddyfile.
+
+```
+https://<domain>/       → devforge-be   (prod)
+https://stg.<domain>/   → devforge-stg  (staging)
+```
+
+Tốn thêm khoảng 1 GB RAM trong 24 GB, và gần như không CPU lúc rảnh. 0₫.
+
+**Bẫy phải xử trước khi dựng — trần container đếm sai khi có hai stack.**
+
+`internal/labs/adapter/repo/session.go:183` đếm ghế từ **database của chính nó**, không hỏi docker daemon:
+
+```sql
+SELECT count(*) FROM lab_sessions WHERE status = 'running' AND container_id <> ''
+```
+
+Hai stack dùng chung một daemon nhưng hai database riêng → mỗi bên tin rằng nó có đủ 40 ghế, và cùng nhau đẻ 80 container lên 4 nhân. `MAX_CONTAINERS` là trần trên *một cơ sở dữ liệu*, không phải trên *một cái máy*. Nên tổng hai bên phải bằng con số máy chịu được:
+
+```
+prod     MAX_CONTAINERS=37
+staging  MAX_CONTAINERS=3
+```
+
+Reaper thì không có vấn đề tương tự: `DueForReaping` (`session.go:252`) quét theo `lab_sessions` của chính nó chứ không liệt kê container toàn daemon, nên hai stack không dọn nhầm container của nhau.
+
+Staging cắt bớt cho rẻ:
+
+| | prod | staging |
+| --- | --- | --- |
+| Postgres | volume riêng + `pg_dump` → R2 | volume riêng, **không backup** |
+| Redis | riêng | dùng chung, khác `REDIS_DB` |
+| `LAB_SESSION_TTL` | `30m` | `10m` |
+| `OPENROUTER_API_KEY` | (rỗng, xem §9.6) | rỗng — đừng đốt tiền AI ở staging |
+| Email | Resend / Brevo | Mailpit (đã có sẵn trong compose) |
+| Grafana Alloy | có | không |
+| Trigger deploy | merge `master` | push `develop` |
+
+Thứ tự: **dựng prod cho xong trước.** Staging tồn tại để diễn tập một pipeline đã có; dựng nó trước là diễn tập cho thứ chưa viết.
 
 ---
 
