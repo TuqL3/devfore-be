@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -23,6 +24,17 @@ import (
 )
 
 func main() {
+	// Dispatched before config.Load: the probe needs a port and nothing else,
+	// and a missing DB_PASSWORD must not be what decides whether the container
+	// is reported healthy.
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		if err := healthcheck(localBase()); err != nil {
+			fmt.Fprintln(os.Stderr, "healthcheck:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := run(); err != nil {
 		slog.Error("server stopped", "err", err)
 		os.Exit(1)

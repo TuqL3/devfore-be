@@ -4,6 +4,12 @@ SHELL := /bin/bash
 -include .env
 export
 
+# Development brings up the dev-profile services (mailpit) explicitly rather
+# than leaning on COMPOSE_PROFILES in .env: an .env written before the profile
+# existed would silently lose the mail catcher. Production composes with -f and
+# never passes this, which is what keeps mailpit off a public box.
+DC := docker compose --profile dev
+
 MIGRATE := docker run --rm --network=host -v $(PWD)/migrations:/migrations migrate/migrate:v4.18.1
 
 .PHONY: help
@@ -12,18 +18,18 @@ help: ## Hiện danh sách lệnh
 
 .PHONY: up
 up: ## Bật postgres (docker)
-	docker compose up -d
+	$(DC) up -d
 
 .PHONY: down
 down: ## Tắt postgres
-	docker compose down
+	$(DC) down
 
 .PHONY: migrate
 migrate: ## Dựng tất cả: postgres, migration, dữ liệu demo, image lab
-	docker compose up -d
+	$(DC) up -d
 	@printf 'chờ postgres'; \
 	 for i in $$(seq 1 60); do \
-	   docker compose exec -T postgres pg_isready -U "$(DB_USER)" -q && break; \
+	   $(DC) exec -T postgres pg_isready -U "$(DB_USER)" -q && break; \
 	   printf '.'; sleep 1; \
 	 done; \
 	 echo ' sẵn sàng'
@@ -48,7 +54,7 @@ migrate-new: ## Tạo migration: make migrate-new name=add_courses
 
 .PHONY: seed
 seed: ## Nạp dữ liệu demo (đã nằm trong `make migrate`)
-	docker compose exec -T postgres psql -U "$(DB_USER)" -d "$(DB_NAME)" < scripts/seed.sql
+	$(DC) exec -T postgres psql -U "$(DB_USER)" -d "$(DB_NAME)" < scripts/seed.sql
 
 .PHONY: admin
 admin: ## Tạo/cấp quyền admin: make admin email=a@b.c password=... [username=...]

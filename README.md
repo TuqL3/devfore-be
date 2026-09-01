@@ -724,9 +724,9 @@ Ba việc trước khi bật:
 | **P6**   | Admin: users (ban/unban), sessions đang chạy (kill)                         | ✅ |
 | **P7**   | Leaderboard + tab Trạng thái + chat WS                                      | ✅ |
 | **P8**   | Nội dung: 3 khoá (Linux, Git, Docker) × 5 lab                               | ✅ |
-| **P10**  | Backup pg_dump → R2 + diễn tập restore                                      | ❌ **làm trước** |
+| **P10**  | Backup pg_dump → R2 + diễn tập restore                                      | ✅ script — chờ bucket + cron, xem `deploy/DEPLOY.md` §G |
 | **P3.5** | Observability: metrics Go + Grafana Alloy → Grafana Cloud + alert           | ❌ |
-| **P9**   | Deploy prod: Ansible, Caddy prod, CD qua SSH, set `TRUSTED_PROXIES` (§9.5)  | ❌ |
+| **P9**   | Deploy prod: Caddy prod, CD qua SSH, set `TRUSTED_PROXIES` (§9.5)           | ✅ — bỏ Ansible, xem `deploy/DEPLOY.md` |
 | **P11**  | _(tuỳ chọn)_ tách runner node riêng, gVisor, hoặc chuyển k3s                | — |
 
 **Thứ tự đảo lại so với bản trước: P10 → P3.5 → P9.** Trên hạ tầng free không có SLA, backup là thứ duy nhất còn lại khi mọi thứ khác biến mất — làm nó trước khi có gì để mất. Rồi đến quan sát được, rồi mới tới tự động deploy.
@@ -765,11 +765,14 @@ devforge-workspace/
 │   ├── labs/                   # Dockerfile 4 image lab + rc file dùng chung
 │   ├── scripts/                # seed.sql, check-seed.sh, smoke-auth.sh, sim-pipelines/
 │   ├── deploy/
-│   │   ├── caddy/              # edge proxy
-│   │   └── ansible/            # harden, docker, user, env file   (P9)
+│   │   ├── caddy/              # Caddyfile (dev) + Caddyfile.prod (TLS)
+│   │   ├── bootstrap.sh        # dựng máy 1 lần — thay Ansible
+│   │   ├── up.sh               # build → migrate → up → health → rollback
+│   │   └── DEPLOY.md           # runbook triển khai
 │   ├── .github/workflows/ci.yml   # gofmt/vet/build/test + gitleaks
 │   ├── Dockerfile              # build → prod (distroless)
 │   ├── docker-compose.yml      # postgres + redis + mailpit + docker-proxy (dev)
+│   ├── docker-compose.prod.yml # + api, web, caddy — mailpit tắt bằng profile
 │   ├── .air.toml · Makefile · lefthook.yml · .env.example
 │
 └── devforge-fe/                # REPO 2 — Vite + React (chạy standalone)

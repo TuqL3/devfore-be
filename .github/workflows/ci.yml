@@ -36,3 +36,24 @@ jobs:
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Deploy runs only after lint/test/gitleaks are green on master. Images are
+  # built on the box (README §9.2), so this step is an ssh and nothing else —
+  # no registry, no QEMU, no artifacts. The env file lives on the server at
+  # chmod 600 and is not shipped from here.
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [be, secrets]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    steps:
+      - name: ssh and release
+        run: |
+          install -d -m 700 ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/id_ed25519 "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+            "cd /opt/devforge/devforge-be && git -C ../devforge-fe pull --ff-only && git pull --ff-only && ./deploy/up.sh"

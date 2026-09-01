@@ -17,9 +17,9 @@
 INSERT INTO users (username, email, password_hash, status)
 VALUES
     ('superadmin', 'superadmin@devforge.local',
-     '$2a$12$YtNj58cMT.SO8hCoB5xJJ.kG2F2v16zmAShGuka6bXQSg.BLTMPGG', 'active'),
+     '$2a$12$YBmQ7EyUpmOKLKBsUV90N.Y7bTQFp4Cn2Zsrigcl/vhX/4ZgTUhxS', 'active'),
     ('lukas', 'lukas@devforge.local',
-     '$2a$12$kg8lDMjjKMktaOifUVCPleumMkP6suUsZK0CB3ymidZhn3lvWESsG', 'active')
+     '$2a$12$zt4e1new1qpWrXx0ZgtuHuVgpY8PloI4iPqLb1fi3BIlvzsHWAUfe', 'active')
 ON CONFLICT (username) DO NOTHING;
 
 -- Roles by name rather than by id: the ids come from an earlier migration's
