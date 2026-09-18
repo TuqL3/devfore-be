@@ -16,7 +16,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 NET=devforge-edge-check
-IMG=nginx:1.27-alpine
+IMG=nginx:1.31-alpine
 TMP=$(mktemp -d)
 BOT='facebookexternalhit/1.1'
 fails=0

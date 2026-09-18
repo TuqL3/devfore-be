@@ -67,7 +67,13 @@ services:
   # server_name is `_`, so this same file serves production and staging; which
   # box it is comes from DNS, not from the config.
   nginx:
-    image: nginx:1.27-alpine
+    # 1.31, not 1.27: the versioned alpine tags are rebuilds on whatever Alpine
+    # they were cut against, and 1.27-alpine carries 39 HIGH CVEs in libxml2,
+    # musl, nghttp2 and zlib that 1.31-alpine does not. This container is the
+    # only thing on the box with a published port, so it is the wrong one to
+    # leave on a stale base. Pinned to the minor line like postgres:16-alpine,
+    # not to `alpine`, which moves without anyone choosing it.
+    image: nginx:1.31-alpine
     ports:
       - "80:80"
       - "443:443"
