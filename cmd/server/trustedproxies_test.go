@@ -14,8 +14,8 @@ import (
 func TestTrustedProxiesDecideTheCallerAddress(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	// What production sets once Caddy is in front — see TRUSTED_PROXIES.
-	behindCaddy := []string{"127.0.0.1", "::1", "172.16.0.0/12"}
+	// What production sets once the edge is in front — see TRUSTED_PROXIES.
+	behindEdge := []string{"127.0.0.1", "::1", "172.16.0.0/12"}
 	// The default: nothing in front, so no header is believed.
 	loopbackOnly := []string{"127.0.0.1", "::1"}
 
@@ -34,17 +34,18 @@ func TestTrustedProxiesDecideTheCallerAddress(t *testing.T) {
 			want:    "203.0.113.9",
 		},
 		{
-			name:    "caddy on the compose bridge is believed",
-			trusted: behindCaddy,
+			name:    "the edge on the compose bridge is believed",
+			trusted: behindEdge,
 			remote:  "172.18.0.4:40000",
 			fwd:     "203.0.113.9",
 			want:    "203.0.113.9",
 		},
 		{
 			// The regression this whole knob exists for: with only loopback
-			// trusted, every request through Caddy answers with Caddy's own
-			// address and the per-address rate limit becomes one global bucket.
-			name:    "caddy unlisted swallows every caller into one address",
+			// trusted, every request through the edge answers with the edge's
+			// own address and the per-address rate limit becomes one global
+			// bucket.
+			name:    "the edge unlisted swallows every caller into one address",
 			trusted: loopbackOnly,
 			remote:  "172.18.0.4:40000",
 			fwd:     "203.0.113.9",
@@ -52,7 +53,7 @@ func TestTrustedProxiesDecideTheCallerAddress(t *testing.T) {
 		},
 		{
 			name:    "a stranger cannot pick an address by sending the header",
-			trusted: behindCaddy,
+			trusted: behindEdge,
 			remote:  "203.0.113.9:5555",
 			fwd:     "10.0.0.1",
 			want:    "203.0.113.9",

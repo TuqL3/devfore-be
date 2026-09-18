@@ -22,7 +22,8 @@ import (
 // meta tags a crawler can read without executing anything.
 //
 // Reverse proxy sends crawler user agents here and everybody else to the app
-// (see deploy/caddy/Caddyfile). The meta refresh is the belt to that braces: a
+// (see deploy/nginx/devforge.conf). The meta refresh is the belt to that
+// braces: a
 // human who reaches this URL directly lands on the real page rather than on a
 // stub, and it costs one line.
 var previewTmpl = template.Must(template.New("preview").Parse(`<!doctype html>

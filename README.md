@@ -31,7 +31,7 @@ Ba khối chức năng:
 
 Đã chốt hạ tầng: **Hostinger VPS KVM2 (2 vCPU amd64 / 8 GB, Singapore)**, **nginx + Cloudflare Origin Certificate** ở biên, FE và API **cùng một origin** trên máy đó (§9.1.1 — quyết định Cloudflare Pages đã bị đảo, lý do là artifact chứ không phải giá). Hai repo, hai image, một đường deploy. Chi phí cố định = VPS + tên miền; xem §9.
 
-**Phương án Oracle Always Free / Caddy là bản cũ và chưa từng dựng thật.** Khoảng cách giữa file trên đĩa và bản đã chốt: **§13**.
+**Phương án Oracle Always Free / Caddy là bản cũ.** File trên đĩa đã theo bản đã chốt — Hostinger + nginx + GHCR; thứ còn thiếu là **máy thật**, và nó chưa từng được dựng. Danh sách còn lại: **§13**.
 
 ---
 
@@ -390,7 +390,7 @@ Ba thứ hay cần nhất:
 | --- | --- |
 | Cắt một bản phát hành | `make release v=v1.2.0` — [INFRA §8, CI/CD](INFRA.md#cicd--hai-repo-gặp-nhau-ở-registry) |
 | Lùi bản đang chạy | `IMAGE_TAG=<tag cũ> … up -d --wait` — [deploy/DEPLOY.md](deploy/DEPLOY.md) |
-| Việc còn phải làm để lên máy thật | [INFRA §13](INFRA.md#13-việc-cần-làm--mua-máy-caddy--nginx) |
+| Việc còn phải làm để lên máy thật | [INFRA §13](INFRA.md#13-việc-cần-làm--mua-máy) |
 
 
 ## 10. Lộ trình
@@ -410,7 +410,7 @@ Ba thứ hay cần nhất:
 | **P10**  | Backup pg_dump → R2 + diễn tập restore                                      | ⚠️ script + cron đã xong (13.0 #5, #7) — **diễn tập restore vẫn chưa ai chạy** |
 | **P3.5** | Observability: metrics Go + Grafana Alloy → Grafana Cloud + alert           | ❌ |
 | **P9**   | Deploy prod: compose prod, CD qua SSH, `TRUSTED_PROXIES`                    | ✅ pipeline xong (GHCR, Trivy, promote, staging) — **chưa có máy để chạy** |
-| **P9.5** | Mua 2 VPS (prod + staging), Caddy → nginx, bootstrap, DNS                    | ❌ — danh sách việc ở §13 |
+| **P9.5** | Mua 2 VPS (prod + staging), Caddy → nginx, bootstrap, DNS                    | ◐ — phần mềm xong (nginx, bootstrap, runbook); còn mua máy + DNS, §13 |
 | **P11**  | _(tuỳ chọn)_ tách runner node riêng, gVisor, hoặc chuyển k3s                | — |
 
 **Thứ tự: P10 → P3.5 → P9.** Backup là thứ duy nhất còn lại khi mọi thứ khác biến mất — làm nó trước khi có gì để mất. Rồi đến quan sát được, rồi mới tới tự động deploy.
@@ -535,6 +535,11 @@ trong CI** của FE (`lint → tsc → check → build`).
 
 `make check-seed` và `make check-sim` cũng ngoài CI — chúng cần docker và database, chấp nhận được,
 nhưng phải chạy tay khi sửa nội dung seed.
+
+`make check-edge` cũng vậy, và nó là cái duy nhất kiểm được `deploy/nginx/devforge.conf`: dựng
+chính file đó trước hai upstream giả rồi hỏi nó từng đường dẫn. `nginx -t` chỉ nói file cú pháp
+đúng — nó không nói `/uploads/*` có rơi vào SPA hay không, mà đó là lỗi trả **200 kèm ảnh vỡ**
+chứ không phải 404 để grep. Chạy tay mỗi lần sửa file edge.
 
 > Compose đặt tên `devforge-be`, tránh trùng volume/container project khác trên máy.
 > Dev không có reverse proxy nào — FE gọi thẳng API. Edge (`deploy/nginx`) chỉ tồn tại ở **prod**,

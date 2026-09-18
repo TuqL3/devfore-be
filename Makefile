@@ -78,6 +78,10 @@ check-seed: ## Chạy mọi check_script trong seed thật sự trong container 
 check-sim: ## Chấm thử mọi nhiệm vụ mô phỏng: pipeline sai phải trượt, pipeline đúng phải đậu
 	go run ./cmd/checksim
 
+.PHONY: check-edge
+check-edge: ## Kiểm route của deploy/nginx/devforge.conf (cần docker; chỉ prod mới có edge)
+	./scripts/edge-routes.check.sh
+
 .PHONY: air
 air: ## Chạy api hot reload (host, cần `make up` trước)
 	air

@@ -29,9 +29,9 @@ type Config struct {
 	// header nobody put there must not be believed.
 	//
 	// Production has to name whatever proxy sits in front, and the value is a
-	// deployment fact rather than a constant: Caddy reaches the API across the
+	// deployment fact rather than a constant: nginx reaches the API across the
 	// compose bridge, so it arrives from 172.16/12, not from loopback. Leave the
-	// default in place there and every request wears Caddy's address instead of
+	// default in place there and every request wears nginx's address instead of
 	// the caller's — the per-address rate limit on the public share routes
 	// collapses into one bucket a single visitor can drain, and audit_logs.ip
 	// records the proxy on every row.
