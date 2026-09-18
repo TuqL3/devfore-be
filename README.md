@@ -464,7 +464,7 @@ devforge-workspace/
     ├── src/{pages,components,api,hooks,context,lib,sims}
     │   ├── pages/admin/
     │   └── lib/*.check.ts      # assert của node, không framework
-    ├── Dockerfile · Caddyfile.static   # image devforge-web, VITE_API_URL ghim rỗng
+    ├── Dockerfile · nginx.static.conf  # image devforge-web, VITE_API_URL ghim rỗng
     ├── .github/workflows/ci.yml   # oxlint/tsc/check/build + gitleaks + trivy + GHCR
     ├── vite.config.ts · lefthook.yml · .env.example
 ```
