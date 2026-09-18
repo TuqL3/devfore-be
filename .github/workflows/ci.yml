@@ -30,7 +30,7 @@ jobs:
       - run: gofmt -l . | (! grep .)
       # golangci-lint REPLACES `go vet`: govet is one of the linters it runs by
       # default, so keeping both means running vet twice and reading it once.
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
       - run: go build ./...
