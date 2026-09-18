@@ -50,7 +50,7 @@ func newRouter(cfg *config.Config, sqlDB *sql.DB, authMod *auth.Module, coursesM
 // decides whether those three are about the caller or about the proxy.
 //
 // It comes from configuration rather than a constant because the answer changes
-// with the deployment: nothing sits in front in development, Caddy does in
+// with the deployment: nothing sits in front in development, nginx does in
 // production. See TRUSTED_PROXIES in .env.example.
 func setTrustedProxies(r *gin.Engine, proxies []string) error {
 	if err := r.SetTrustedProxies(proxies); err != nil {

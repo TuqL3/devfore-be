@@ -3,7 +3,7 @@
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
 # What it adds over the base: the API and the FE actually run as containers
-# (in development both run on the host under air/vite), and Caddy is the only
+# (in development both run on the host under air/vite), and nginx is the only
 # thing on the network with a published port.
 services:
   # Pulled, never built here. Both the runner and the box are amd64, so there is
@@ -28,7 +28,7 @@ services:
       LAB_DOCKER_HOST: tcp://docker-proxy:2375
     volumes:
       - uploads:/uploads
-    # Nothing published. Caddy reaches this over the bridge, which is also the
+    # Nothing published. nginx reaches this over the bridge, which is also the
     # precondition for widening TRUSTED_PROXIES to 172.16.0.0/12 (§9.5).
     expose:
       - "8080"
@@ -57,20 +57,35 @@ services:
       - "80"
     restart: unless-stopped
 
-  caddy:
-    image: caddy:2-alpine
+  # The edge. TLS terminates here on a Cloudflare Origin Certificate, so there
+  # is no ACME client, no challenge to fail and no certificate state to keep on
+  # a volume: the cert is two files that a human put on the box and that expire
+  # in fifteen years (INFRA.md §9.5). That is the whole reason this is nginx and
+  # not Caddy any more — Caddy's automatic HTTPS was the feature being paid for,
+  # and behind an orange cloud it is the one thing that cannot be used.
+  #
+  # server_name is `_`, so this same file serves production and staging; which
+  # box it is comes from DNS, not from the config.
+  nginx:
+    image: nginx:1.27-alpine
     ports:
       - "80:80"
       - "443:443"
-    environment:
-      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
-      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
     volumes:
-      - ./deploy/caddy/Caddyfile.prod:/etc/caddy/Caddyfile:ro
-      # Losing this means re-issuing certs on every restart, and Let's Encrypt
-      # rate-limits that to five per week per domain.
-      - caddy_data:/data
-      - caddy_config:/config
+      - ./deploy/nginx/devforge.conf:/etc/nginx/conf.d/default.conf:ro
+      # Origin certificate and key. Read-only, and the directory is gitignored
+      # except for its own .gitignore — a private key never reaches the repo.
+      - ./deploy/nginx/certs:/etc/nginx/certs:ro
+    healthcheck:
+      # Loopback inside the container, not through the published port: this
+      # answers whether the edge is serving, not whether the API is up. Without
+      # it `up -d --wait` counts a crash-looping container as running and a
+      # release that cannot serve a byte reports healthy.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:81/nginx-alive"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on: [api, web]
     restart: unless-stopped
 
@@ -82,5 +97,3 @@ services:
 
 volumes:
   uploads:
-  caddy_data:
-  caddy_config:

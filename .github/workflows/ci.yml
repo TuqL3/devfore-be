@@ -307,7 +307,7 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
           # Only the be clone is checked out now, and only for the things that
-          # are not in an image: migrations, the Caddyfile, the compose files and
+          # are not in an image: migrations, the nginx config, the compose files and
           # up.sh itself. devforge-fe is not cloned on the box at all any more —
           # it is a pulled image — which is also what retired the two-repo
           # checkout and the detached-HEAD trap that came with it.

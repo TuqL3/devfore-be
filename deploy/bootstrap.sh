@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# One-shot server setup for a fresh Ubuntu 22.04/24.04 ARM64 box. Run once as
-# root over SSH; everything after this is `git pull && compose up`.
+# One-shot server setup for a fresh Hostinger amd64 box, Ubuntu 24.04 with the
+# Docker template. Run once as root over SSH; everything after this is
+# `./deploy/up.sh`.
 #
-#   scp deploy/bootstrap.sh ubuntu@<ip>:/tmp/ && ssh ubuntu@<ip> 'sudo bash /tmp/bootstrap.sh'
+#   scp deploy/bootstrap.sh root@<ip>:/tmp/ && ssh root@<ip> 'bash /tmp/bootstrap.sh'
 #
-# Not Ansible: one host, one run, no inventory and no drift to converge. A
+# Same script for the production box and the staging one — they differ in .env
+# and in nothing else (INFRA.md §8 "Staging").
+#
+# Not Ansible: two hosts, one run each, no inventory and no drift to converge. A
 # playbook here is a dependency and a second language for forty lines of apt.
 set -euo pipefail
 
@@ -19,15 +23,16 @@ apt-get update -qq
 apt-get install -y -qq ca-certificates curl git ufw fail2ban unattended-upgrades cron
 
 echo "==> docker engine"
-if ! command -v docker >/dev/null; then
-  install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-  chmod a+r /etc/apt/keyrings/docker.asc
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
-    > /etc/apt/sources.list.d/docker.list
-  apt-get update -qq
-  apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+# The Hostinger template ships Docker, so this is a check rather than an install
+# (INFRA.md §9.1). Fail loudly instead of installing a second copy from another
+# repository: a box running two Docker installs is a box where `docker ps` and
+# the compose file disagree about which daemon holds the containers.
+if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
+  echo "no docker, or no compose plugin — pick the Ubuntu 24.04 + Docker template" >&2
+  echo "when creating the VPS, or install Docker by hand before running this" >&2
+  exit 1
 fi
+docker --version
 
 # Lab containers are the point of the product and they are cattle: without a
 # cap, one runaway lab's log fills 200 GB and takes the database down with it.
@@ -62,9 +67,10 @@ ufw allow 22/tcp
 ufw allow 80/tcp
 ufw allow 443/tcp
 ufw --force enable
-# Oracle Cloud also has its own security list in the VCN. ufw is the second
-# door, not the first: 80 and 443 have to be opened there as well or the box
-# stays unreachable no matter what ufw says.
+# ⚠️ Hostinger has its own firewall in hPanel, and ufw is the SECOND door, not
+# the first: 80 and 443 have to be opened there as well (INFRA.md §9.1). Forget
+# that one and the box stays unreachable while `ufw status` reports everything
+# is fine — which is why this note is here rather than only in the runbook.
 
 echo "==> ssh hardening"
 sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
@@ -72,11 +78,12 @@ sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd
 systemctl reload ssh || systemctl reload sshd
 
 echo "==> swap"
-# 24 GB of RAM does not need swap to run, but the Go and Vite builds run on
-# this box now (INFRA.md §9.2) and a build OOM-killing Postgres is a worse
-# outcome than a slow build.
+# 2 GB, down from the 4 GB the Oracle box needed. That size was sized for the Go
+# and Vite builds, and nothing is built here any more (INFRA.md §9.2) — images
+# are pulled. What is left is headroom for a burst of lab containers, so the
+# reaper gets a chance to run instead of the kernel picking a victim.
 if ! swapon --show | grep -q .; then
-  fallocate -l 4G /swapfile
+  fallocate -l 2G /swapfile
   chmod 600 /swapfile
   mkswap /swapfile >/dev/null
   swapon /swapfile
@@ -120,13 +127,17 @@ cat <<TXT
 
 done.
 
-next, as $APP_USER:
+next, as $APP_USER — only the be repo is cloned, the FE ships as an image now:
   git clone <be repo> $APP_DIR/devforge-be
-  git clone <fe repo> $APP_DIR/devforge-fe
   cd $APP_DIR/devforge-be
   cp .env.prod.example .env && chmod 600 .env   # then fill it in
-  ./deploy/up.sh
+  install -m 600 /dev/null deploy/nginx/certs/origin.key   # paste the key in
+  install -m 644 /dev/null deploy/nginx/certs/origin.pem   # paste the cert in
+  IMAGE_TAG=<tag> ./deploy/up.sh
 
-then point the domain's A record at this box BEFORE the first up: Caddy asks
-Let's Encrypt over HTTP-01 and a failed challenge retries into a rate limit.
+there is no ACME here: TLS is a Cloudflare Origin Certificate, two files you
+paste onto the box. Nothing expires for fifteen years and nothing is requested
+at startup, so the DNS record does not have to exist before the first up — but
+the orange cloud does have to be ON afterwards, because that certificate is
+trusted by Cloudflare and by no browser. Full runbook: deploy/DEPLOY.md.
 TXT

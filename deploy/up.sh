@@ -113,7 +113,7 @@ fi
 echo "==> rolling back to $PREV" >&2
 # Only the image goes back. The checkout stays on the failed tag, which is
 # harmless — CD force-checks-out the next tag rather than pulling, so there is
-# no branch state to get stuck on — but it does mean the Caddyfile and the
+# no branch state to get stuck on — but it does mean the nginx config and the
 # migrations on disk are the new ones. Both are required to be backward
 # compatible with the previous image for exactly this reason.
 pull "$PREV"

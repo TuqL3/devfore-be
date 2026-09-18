@@ -25,7 +25,7 @@ Image **build một lần ở GitHub Actions rồi đẩy lên GHCR**, máy prod
 
 > **FE cũng là một image, và cũng promote được.** Vite bake `VITE_API_URL` lúc build, nên bất kỳ giá trị nào khác rỗng đều làm image dính chặt vào một môi trường: bản build cho staging không bao giờ là bản lên production. Cách thoát nằm ở chỗ **không bake gì cả**.
 >
-> `devforge-fe/Dockerfile` ghim `ENV VITE_API_URL=""` — không phải `ARG`, nên không có gì để quên truyền. Bundle gọi đường dẫn tương đối, và biên đã route `/api`, `/ws`, `/uploads` sang API trên **cùng origin** (`deploy/caddy/Caddyfile.prod`). Một image chạy được mọi môi trường; xem §9.1.1 vì sao phương án Cloudflare Pages bị đảo lại.
+> `devforge-fe/Dockerfile` ghim `ENV VITE_API_URL=""` — không phải `ARG`, nên không có gì để quên truyền. Bundle gọi đường dẫn tương đối, và biên đã route `/api`, `/ws`, `/uploads` sang API trên **cùng origin** (`deploy/nginx/devforge.conf`). Một image chạy được mọi môi trường; xem §9.1.1 vì sao phương án Cloudflare Pages bị đảo lại.
 >
 > ⚠️ **Rỗng thì `fetch` sống nhưng `new URL` chết.** `new URL(path, "")` ném `TypeError: Invalid base URL`, nên `src/api/labs.ts` dùng `||` chứ không `??`: `import.meta.env.VITE_API_URL || location.origin`. Dev không đổi — không có biến thì vẫn rơi về `http://localhost:8080`.
 
@@ -118,9 +118,10 @@ https://<domain>/            → SPA (image devforge-web) và API, cùng một b
     còn lại     → SPA
 ```
 
-Đây đúng là thứ `deploy/caddy/Caddyfile.prod` đang làm. Bản nginx (§13.2) phải
-giữ nguyên **cả năm** route, không phải chỉ `location /`. Vì sao một origin chứ
-không phải hai: §9.1.1.
+Đây đúng là thứ `deploy/nginx/devforge.conf` đang làm, và `make check-edge`
+dựng chính file đó trước hai upstream giả rồi hỏi từng đường dẫn — **cả năm**
+route, không phải chỉ `location /`. Vì sao một origin chứ không phải hai:
+§9.1.1.
 
 `COOKIE_DOMAIN` để trống — cùng origin thì cookie host-only là đúng, và
 `SameSite=Lax` không bao giờ thành vấn đề vì không có bên thứ hai nào.
@@ -136,8 +137,9 @@ sạch ảnh đã upload.
 JavaScript nên link chia sẻ hiện ô trắng; khối `@crawler` rewrite `/r/:id` và
 `/war-room/day/:date` sang endpoint preview. Giữ nguyên hai biểu thức chính quy
 (`^[A-Za-z0-9_-]+$` cho id, `^\d{4}-\d{2}-\d{2}$` cho ngày) — chúng ở đó để
-không đẩy rác vào một endpoint sinh ảnh. Cả Caddy lẫn nginx đều chạy theo thứ tự
-viết và không tự sắp lại giúp.
+không đẩy rác vào một endpoint sinh ảnh. nginx thử location regex theo đúng thứ tự viết, và
+regex luôn thắng prefix match `location /` — đó là thứ giữ hai khối này đứng
+trước route bắt-tất-cả.
 
 Khi chốt domain:
 
@@ -252,7 +254,7 @@ ra bản mới khi có người gắn tag (`make release v=v1.2.0`). Hệ quả:
 - `master` là nhánh *deploy được*, không phải nhánh *đã deploy*. Cái đang chạy trên prod là tag gần nhất, không phải HEAD của `master`.
 - `promote` đòi `merge-base --is-ancestor`, nên tag cắt từ nhánh phụ bị từ chối kể cả khi commit đó xanh.
 - Chỉ còn **một** clone trên mỗi box: repo fe là image, không được clone ở đó nữa. Bẫy detached-HEAD của lỗi 13.0#3 biến mất theo — rollback đổi `IMAGE_TAG`, không `git checkout`.
-- Sau rollback, clone be vẫn nằm ở tag hỏng. Không sao — lần sau `checkout --force` chứ không `pull`. Nhưng Caddyfile và `migrations/` trên đĩa là bản mới trong khi image là bản cũ, nên cả hai bắt buộc tương thích ngược.
+- Sau rollback, clone be vẫn nằm ở tag hỏng. Không sao — lần sau `checkout --force` chứ không `pull`. Nhưng file nginx và `migrations/` trên đĩa là bản mới trong khi image là bản cũ, nên cả hai bắt buộc tương thích ngược.
 
 Tên tag đi thẳng vào một lệnh shell qua ssh, nên `ci.yml` chặn trước khi gửi: chỉ
 nhận `v[0-9]…` gồm `[A-Za-z0-9._-]`. Bộ lọc `tags: ["v*"]` của GitHub lọc tên,
@@ -480,7 +482,7 @@ thứ lên prod vẫn là bit chưa ai chạy.
 
 Cách thoát: **không bake gì cả.** `Dockerfile` ghim `ENV VITE_API_URL=""`, bundle
 gọi đường dẫn tương đối, biên route `/api`, `/ws`, `/uploads` sang API trên cùng
-origin — đúng thứ `Caddyfile.prod` vốn đã làm. Điều kiện là FE ở lại sau cùng cái
+origin — đúng thứ `deploy/nginx/devforge.conf` làm. Điều kiện là FE ở lại sau cùng cái
 proxy đó.
 
 Được thêm: cookie phiên hết bài SameSite/CORS/subdomain, và khối `@crawler` cho
@@ -630,9 +632,9 @@ hỏi. Server ghi `slog.Warn` lúc khởi động nếu thấy giá trị này, 
 một server không chịu boot vì cấu hình proxy thì làm sập site theo hướng ngược
 lại.
 
-Hành vi được ghim bởi `cmd/server/trustedproxies_test.go`. Tên ca kiểm thử còn nói
-"caddy", đổi tên là việc trong §13 — nội dung nó ghim vẫn đúng nguyên vẹn với
-nginx.
+Hành vi được ghim bởi `cmd/server/trustedproxies_test.go`, và nửa còn lại —
+`set_real_ip_from` + `real_ip_header` — bởi `make check-edge`, ca "a forged
+X-Forwarded-For is replaced, not passed through".
 
 ⚠️ **Cache rule phải theo PATH, không theo host.** FE và API dùng chung một tên miền (§9.1.1), nên không còn cách tách bằng host nữa. Mây
 cam bật lên là có CDN, và đó là thứ tốt cho `assets/*` của SPA. Với đường dẫn API thì
@@ -743,9 +745,9 @@ Sơ đồ tự dựng hay có nginx ở biên (TLS + routing) **và** một ngin
 
 ---
 
-## 13. Việc cần làm — mua máy, Caddy → nginx
+## 13. Việc cần làm — mua máy
 
-Đây là danh sách quyết định. Mọi thứ ở §8 và §9 mô tả **đích**; phần lớn file trên đĩa vẫn đang là bản Oracle/Caddy. Dưới đây là khoảng cách giữa hai bên.
+Đây là danh sách quyết định. Mọi thứ ở §8 và §9 mô tả **đích**. Khoảng cách phần mềm đã đóng: Caddy → nginx xong, `deploy/caddy/` đã xoá, `bootstrap.sh` và `.env.prod.example` khớp máy Hostinger. **Còn lại đúng một thứ chặn: chưa có máy.**
 
 ### 13.0 Lỗi đã có sẵn trên đĩa — đã sửa hết
 
@@ -791,21 +793,22 @@ Giữ lại đây một dòng mỗi lỗi vì lý do vẫn còn giá trị; chi 
 
 | | File | Việc |
 | --- | --- | --- |
-| ☐ | `deploy/nginx/devforge.conf` | **Mới.** Một site duy nhất (`server_name _`, box chỉ phục vụ API): 80 → 301 sang 443; cert Origin; `set_real_ip_from` các dải Cloudflare + `real_ip_header CF-Connecting-IP`; `location /ws/` với `proxy_buffering off` + timeout 3600s; `location /`; `client_max_body_size` cho upload ảnh. ⚠️ Upstream phải đi qua biến + `resolver 127.0.0.11` — nginx cache DNS vĩnh viễn, container `api` mới sau mỗi deploy sẽ nhận 502 nếu không |
-| ☐ | `deploy/nginx/certs/.gitignore` | **Mới.** `*` + `!.gitignore` — khoá riêng không bao giờ vào git |
-| ☐ | `deploy/caddy/` | Xoá cả thư mục |
-| ✅ | `docker-compose.prod.yml` | `api` và `web` đổi từ `build:` sang `image: ${IMAGE_REPO}/devforge-{api,web}:${IMAGE_TAG}`, **không còn khoá `build:` nào** — có nó thì `up` lặng lẽ build lại khi thiếu image, tức là box quay về compile bản phát hành. `IMAGE_TAG` dùng `${IMAGE_TAG:?}` chứ không mặc định. Service `web` **ở lại** (§9.1.1 đảo quyết định Pages); phần Caddy → nginx vẫn còn nợ |
+| ✅ | `deploy/nginx/devforge.conf` | **Mới, đã viết.** Một site duy nhất (`server_name _`, box chỉ phục vụ API): 80 → 301 sang 443; cert Origin; `set_real_ip_from` các dải Cloudflare + `real_ip_header CF-Connecting-IP`; `location /ws/` với `proxy_buffering off` + timeout 3600s; `location /`; `client_max_body_size` cho upload ảnh. ⚠️ Upstream phải đi qua biến + `resolver 127.0.0.11` — nginx cache DNS vĩnh viễn, container `api` mới sau mỗi deploy sẽ nhận 502 nếu không |
+| ✅ | `deploy/nginx/certs/.gitignore` | **Mới.** `*` + `!.gitignore` — khoá riêng không bao giờ vào git |
+| ✅ | `deploy/caddy/` | Đã xoá cả thư mục. Bản dev trong đó vốn đã mồ côi — không compose file nào mount nó |
+| ✅ | `docker-compose.prod.yml` | `api` và `web` đổi từ `build:` sang `image: ${IMAGE_REPO}/devforge-{api,web}:${IMAGE_TAG}`, **không còn khoá `build:` nào** — có nó thì `up` lặng lẽ build lại khi thiếu image, tức là box quay về compile bản phát hành. `IMAGE_TAG` dùng `${IMAGE_TAG:?}` chứ không mặc định. Service `web` **ở lại** (§9.1.1 đảo quyết định Pages). Service `caddy` đã đổi thành `nginx`: mount `devforge.conf` + `certs/`, hết `caddy_data`/`caddy_config` (Origin Cert không có state để giữ), và có healthcheck riêng trên `127.0.0.1:81` vì `up -d --wait` tính một container đang crash-loop là đang chạy |
 | ✅ | `deploy/up.sh` | Viết lại: `pull` thay `build`, `up -d --wait --wait-timeout 120` thay hàm `healthy()` tự viết, rollback đổi sang `IMAGE_TAG=$(cat .image-tag)` và **không chạy lại migrate** (lỗi 13.0#4). Đòi `IMAGE_TAG`. Pull 4 lab image rồi `docker tag` về `devforge/<tên>:latest` cho khớp bảng `lab_images`. Lần deploy đầu chưa có `.image-tag` → nói thẳng là không có gì để lùi thay vì lùi bừa |
-| ☐ | `deploy/bootstrap.sh` | Bỏ phần cài Docker nếu dùng template có sẵn; bỏ dòng hướng dẫn clone repo fe; ghi chú tường lửa hPanel; swap 4 GB → 2 GB (không còn build trên box) |
-| ◐ | `.env.prod.example` | ✅ thêm `IMAGE_REPO`. ☐ còn lại: `PUBLIC_URL`/`FRONTEND_URL`/`CORS_ORIGINS`/`GOOGLE_REDIRECT_URL` theo bảng §8; bỏ `ACME_EMAIL` khi chuyển nginx; `MAX_CONTAINERS=12`; `LAB_SESSION_TTL=20m` |
+| ✅ | `deploy/bootstrap.sh` | Docker: **kiểm rồi thoát**, không cài — hai bản cài trên một máy là chỗ `docker ps` và compose bất đồng ý ai giữ container. Bỏ clone fe; ghi chú tường lửa hPanel; swap 2 GB; lời nhắn cuối nói cert Origin thay vì ACME |
+| ✅ | `.env.prod.example` | `IMAGE_REPO` có; `PUBLIC_URL`/`FRONTEND_URL`/`CORS_ORIGINS`/`GOOGLE_REDIRECT_URL` đã khớp bảng §8; `ACME_EMAIL` đã bỏ; `MAX_CONTAINERS=12`; `LAB_SESSION_TTL=20m` |
 | ✅ | `.github/workflows/ci.yml` | Job `images` (master: build → quét → push `:sha-<short>`), job `promote` (tag: `imagetools create` sang `:v1.2.0`, đòi tag nằm trên master), job `deploy` (chờ `devforge-web:<tag>` rồi ssh, truyền `IMAGE_TAG`). Chỉ checkout clone be — repo fe không còn trên box |
 | ✅ | `.github/workflows/ci.yml` | `trivy image` chạy trên image `--load` **trước** bước push, cộng 4 lab image; `trivy fs` trong job `secrets`. Cờ: `--severity HIGH,CRITICAL --ignore-unfixed --exit-code 1` |
 | ✅ | `.github/workflows/ci.yml` | `go vet` → `golangci-lint run`; `go test` → `-coverprofile` + sàn **16.5%** (số của cây lúc thêm bước này là 16.8%). Bánh cóc: nâng khi coverage lên, không hạ để build xanh |
 | ✅ | `.trivyignore` | Rỗng có chủ ý, chỉ còn quy tắc: mỗi dòng bỏ qua **phải có `exp:<ngày>`** kèm lý do. Không hạn = tắt scanner cho CVE đó vĩnh viễn |
 | ✅ | `.golangci.yml` | v2, `default: standard` + `bodyclose`, `rowserrcheck`, `sqlclosecheck`, `errorlint`. Dùng preset loại trừ có sẵn thay vì danh sách tự chế. Cây đang **0 issue** — 5 lỗi thật đã vá: field `total` chết ở `streak.go`, `%v` → `%w` ở `simgen.go`, `client.IsErrNotFound` đã deprecated → `cerrdefs.IsNotFound`, thứ tự trả về của helper test |
-| ☐ | `deploy/DEPLOY.md` | Viết lại toàn bộ — đang là runbook Oracle |
-| ☐ | `Makefile` | ✅ **đã thêm** `release` (tag + push cả hai repo, chặn tag trùng và cây bẩn) và `cover` |
-| ☐ | Comment trong code | `cmd/server/router.go:53`, `internal/config/config.go:32`, `internal/labs/adapter/rest/preview.go:25` còn nói "Caddy"; `cmd/server/trustedproxies_test.go` còn tên ca `behindCaddy`. Chỉ là chữ, không đổi hành vi — đổi tên cho khỏi lạc hướng người đọc sau |
+| ◐ | `deploy/DEPLOY.md` | Đã viết lại theo thứ tự của §13.4, tách nhỏ hơn, cộng mục 502-sau-deploy. **Chưa ai chạy nó trên máy thật** — những chỗ chỉ biết khi đứng trên máy có dấu ⚠️ *kiểm trên máy*, sửa ngay trong lần dựng đầu |
+| ✅ | `Makefile` | `release` (tag + push cả hai repo, chặn tag trùng và cây bẩn), `cover`, và `check-edge` — xem dòng dưới |
+| ✅ | `scripts/edge-routes.check.sh` | **Mới.** Dựng `devforge.conf` thật trước hai upstream giả tên `api`/`web` rồi hỏi 14 đường dẫn qua https. `nginx -t` chỉ nói file cú pháp đúng; nó không nói `/uploads/*` có rơi vào SPA hay không, mà đó là lỗi trả **200 kèm ảnh vỡ** chứ không phải 404 để grep. Đã bắt một lỗi thật lúc viết: `{4}` trong regex ngày bị nginx đọc là mở block, phải quote |
+| ✅ | Comment trong code | Đổi hết sang nginx: `cmd/server/router.go`, `internal/config/config.go`, `internal/labs/adapter/rest/preview.go`, `deploy/up.sh`, `ci.yml`, `.env.example`; `behindCaddy` → `behindEdge` trong `trustedproxies_test.go`. Chỉ là chữ, `go build ./...` và test xanh |
 
 ### 13.3 Repo `devforge-fe` — file phải sửa
 
@@ -821,7 +824,7 @@ Giữ lại đây một dòng mỗi lỗi vì lý do vẫn còn giá trị; chi 
 | ✅ | `src/components/LabTerminal.tsx` | Reconnect có backoff khi socket đứt bất thường (mã 1006). Không có nó thì **mỗi lần deploy đá cả lớp ra khỏi terminal** |
 | ✅ | `src/lib/wsRetry.ts` + `.check.ts` | Quy tắc "đóng sạch = phiên kết thúc, đóng bất thường = thử lại" tách ra khỏi component và có assert riêng. Đăng ký trong `npm run check` |
 | ✅ | `.github/workflows/ci.yml` | Thêm `trivy fs`, job `image` (master: build → `trivy image` → push `devforge-web:sha-<short>`), job `promote` (tag: `imagetools create` sang `:v1.2.0`). Vẫn **không có** job deploy |
-| ☐ | `.env` local | Đang là `VITE_API_URL=http://localhost:8888`. Chỉ ảnh hưởng `vite dev`, không vào image — nhưng nó phải khớp cổng API đang chạy, nếu không dev gọi vào chỗ trống |
+| ✅ | `.env` local | `VITE_API_URL=http://localhost:8888` khớp `PORT=8888` trong `devforge-be/.env`. Hai file `.env.example` vẫn ghi 8080 và cũng khớp nhau — không đụng, đổi một bên là làm hỏng máy của người đang dùng bên kia |
 
 ### 13.4 Thứ tự
 
@@ -833,28 +836,34 @@ Giữ lại đây một dòng mỗi lỗi vì lý do vẫn còn giá trị; chi 
 ✅ trivy image (api + 4 lab) trước bước push, trivy fs cho dependency
 ✅ golangci-lint thay go vet + sàn coverage
 ✅ promote theo tag + cổng xuyên repo qua registry + make release
+✅ Caddy → nginx: devforge.conf + certs/, compose đổi service, deploy/caddy/ xoá
+✅ bootstrap.sh cho template Hostinger, .env.prod.example khớp bảng §8
+✅ make check-edge — 14 route của biên, chạy được trên máy dev
+✅ deploy/DEPLOY.md viết lại  ← còn phải sửa lại lúc đứng trên máy thật
 ```
 
-**Còn lại, theo thứ tự bắt buộc:**
+**Còn lại, theo thứ tự bắt buộc. Từ đây mọi bước đều cần máy:**
 
 ```
 1. Mua máy + DNS + Origin Cert          (13.1, phần hạ tầng)
-2. Phần hạ tầng còn nợ của repo be      (13.2: Caddy → nginx, bootstrap, .env)
-3. bootstrap.sh trên máy mới + .env + IMAGE_TAG=<tag> up.sh chạy tay lần đầu
-4. R2 + chạy backup tay + DIỄN TẬP RESTORE   ← đừng để sau
-5. Đặt package GHCR sang Public, hoặc box phải docker login bằng PAT
-6. Bật CD, cắt một tag vô hại bằng `make release`, xem nó chạy hết đường
-7. Diễn tập rollback bằng tay: IMAGE_TAG=<tag cũ> docker compose up -d --wait
-8. VPS thứ hai cho staging       ← đã chốt mua, §8 "Staging"
+2. bootstrap.sh trên máy mới + .env + cert + IMAGE_TAG=<tag> up.sh chạy tay lần đầu
+3. R2 + chạy backup tay + DIỄN TẬP RESTORE   ← đừng để sau
+4. Đặt package GHCR sang Public, hoặc box phải docker login bằng PAT
+5. Bật CD, cắt một tag vô hại bằng `make release`, xem nó chạy hết đường
+6. Diễn tập rollback bằng tay: IMAGE_TAG=<tag cũ> docker compose up -d --wait
+7. VPS thứ hai cho staging       ← đã chốt mua, §8 "Staging"
    bootstrap.sh + .env theo khối STAGING ở cuối .env.prod.example
    DNS staging.<domain> + Google redirect URI thứ hai
    3 secret STAGING_SSH_* → job deploy-staging tự bật
-9. SonarCloud                    ← đã có số coverage để gate
+8. SonarCloud                    ← đã có số coverage để gate
 ```
 
-Bước 4 và bước 7 là hai bước hay bị bỏ nhất và cũng là hai bước duy nhất chứng minh được lưới an toàn có thật.
+Runbook từng bước: [deploy/DEPLOY.md](deploy/DEPLOY.md). Nó đánh số theo đúng
+danh sách này, cộng một mục cho lỗi 502-sau-deploy.
 
-⚠️ **Bước 6 có một cái bẫy của lần đầu.** `promote` đòi image `:sha-<short>` của commit được tag phải có sẵn trên GHCR, mà image chỉ được build khi push **master**. Nên tag đầu tiên phải cắt trên một commit đã đi qua master **sau khi** job `images` tồn tại. Tag một commit cũ hơn thì `promote` dừng và nói thẳng lý do.
+Bước 3 và bước 6 là hai bước hay bị bỏ nhất và cũng là hai bước duy nhất chứng minh được lưới an toàn có thật.
+
+⚠️ **Bước 5 có một cái bẫy của lần đầu.** `promote` đòi image `:sha-<short>` của commit được tag phải có sẵn trên GHCR, mà image chỉ được build khi push **master**. Nên tag đầu tiên phải cắt trên một commit đã đi qua master **sau khi** job `images` tồn tại. Tag một commit cũ hơn thì `promote` dừng và nói thẳng lý do.
 
 ### 13.5 Kiểm chứng sau khi lên
 
@@ -881,7 +890,7 @@ Trên trình duyệt, những thứ chỉ hỏng ở prod nên phải nhìn tậ
 | ~~Uptime monitor ngoài~~ | Đã chuyển lên 13.1 — quá rẻ để xếp vào nợ |
 | ~~Sentry~~ | Đã chuyển lên 13.1, cùng lý do |
 | ~~trivy quét image~~ | **Đã làm.** Lý do cũ ("base chính thức") chỉ đúng cho image API distroless, không đúng cho 4 image lab nơi người lạ có shell. Giờ quét cả sáu image, trước bước push |
-| SonarCloud | `golangci-lint` + sàn coverage đã có, nên rào cản đã hết — còn lại là việc tạo tài khoản (§13.4 bước 8). Tự dựng SonarQube thì **không bao giờ** trên box này — §9.4 |
+| SonarCloud | `golangci-lint` + sàn coverage đã có, nên rào cản đã hết — còn lại là việc tạo tài khoản (§13.4 bước 8, SonarCloud). Tự dựng SonarQube thì **không bao giờ** trên box này — §9.4 |
 | Reconnect cho WebSocket chat | `LabTerminal` đã có; `src/api/chat.ts` dùng chung `terminalURL` nhưng chưa dùng chung phần thử lại. Ít đau hơn: mất một socket chat không giết một phiên lab |
-| ~~Staging BE~~ | **Hết là nợ.** Đã chốt mua VPS thứ hai và job `deploy-staging` đã có; còn lại là mua máy — §13.4 bước 8 |
+| ~~Staging BE~~ | **Hết là nợ.** Đã chốt mua VPS thứ hai và job `deploy-staging` đã có; còn lại là mua máy — §13.4 bước 7 |
 | Bỏ Redis (dồn session vào Postgres) | Đang chạy, 0 cấu hình. Lãi một container, không đáng ưu tiên |
