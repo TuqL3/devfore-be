@@ -41,6 +41,25 @@ Image **build một lần ở GitHub Actions rồi đẩy lên GHCR**, máy prod
 | Log       | stdout                         | stdout → `docker compose logs` (chưa có gom log, §1)                    |
 | Deploy    | hot reload (`air`, `vite dev`) | Actions → GHCR → promote theo tag → SSH → `up.sh` (pull + `up -d --wait`) |
 
+⚠️ **`sha-<short>` của hai repo KHÔNG bằng nhau, nên một sha không gọi tên được
+một stack.** `deploy/up.sh` kéo `api`, `web` và 4 image lab bằng **cùng một**
+`IMAGE_TAG`; `api` và 4 lab mang sha của be, `web` mang sha của fe. Nghĩa là
+`IMAGE_TAG=sha-<của be>` kéo được 5 image rồi chết ở `devforge-web:sha-<của be>`
+— một tag không tồn tại và sẽ không bao giờ tồn tại.
+
+Hệ quả có hai nửa, và cả hai đều từng sai trên đĩa:
+
+- **Prod phải là tag `vX.Y.Z`** — thứ duy nhất cả hai repo cùng promote. Đó là
+  lý do tag phiên bản tồn tại, chứ không phải để cho đẹp. `deploy/DEPLOY.md` §4
+  từng bảo dùng một tag bất kỳ; đã sửa.
+- **Staging dùng tag trôi `:master`.** Job `deploy-staging` từng truyền
+  `IMAGE_TAG=sha-$(git rev-parse --short HEAD)` của chính repo be, nên nó sẽ
+  chết đúng ở `devforge-web` **ngay lần đầu được bật** — tức là ngay sau khi
+  thêm ba secret `STAGING_SSH_*`, lúc không ai nghi ngờ gì. Giờ cả hai repo đẩy
+  thêm `:master` cho bản master mới nhất và staging deploy tag đó. Cái giá:
+  `.image-tag` trên staging ghi `master`, nên staging không có đích rollback —
+  chấp nhận được, staging là máy dùng xong bỏ.
+
 **Rollback = đổi tag, không phải build lại.** `deploy/up.sh` ghi tag đang chạy vào `.image-tag` sau mỗi lần khoẻ, và lấy chính nó làm đích lùi: `IMAGE_TAG=<tag-cũ> docker compose up -d --wait` — vài giây, vì image cũ đã nằm sẵn ở GHCR và trong cache của box. Đây là lãi trực tiếp của việc rời ARM (§9.2); bản Oracle cũ phải build lại 1–2 phút trong lúc bản lỗi vẫn đang phục vụ.
 
 Rollback **chỉ lùi image**, không lùi schema và không chạy lại migration — xem "Migration tương thích ngược" bên dưới, và ba chi tiết ở phần CI/CD.
@@ -65,7 +84,7 @@ Rollback **chỉ lùi image**, không lùi schema và không chạy lại migrat
 | `PUBLIC_URL`                                  | `http://localhost:8080` | `https://<domain>` — **origin trần, không có `/api`** | compose |
 | `UPLOAD_DIR`                                  | `./uploads`             | `./uploads` (bind mount, xem "Domain & routing") | compose |
 | `TRUSTED_PROXIES`                             | `127.0.0.1,::1`         | `127.0.0.1,::1,172.16.0.0/12` — **bắt buộc, và chỉ là một nửa: nginx phải khôi phục IP thật từ Cloudflare, xem §9.5** | compose |
-| `DATABASE_URL` (migrate)                      | `sslmode=disable`       | `sslmode=require`      | **secret** |
+| `DATABASE_URL` (migrate)                      | `sslmode=disable`       | `sslmode=disable` — xem ghi chú dưới bảng | **secret** |
 | `LAB_DOCKER_HOST`                             | `tcp://127.0.0.1:2375`  | `tcp://127.0.0.1:2375` | compose    |
 | `LAB_SESSION_TTL`                             | `60m`                   | `20m` (xem §9.4)       | compose    |
 | `MAX_CONTAINERS`                              | `40`                    | `12` — 2 vCPU, xem §9.4 | compose   |
@@ -80,6 +99,14 @@ Rollback **chỉ lùi image**, không lùi schema và không chạy lại migrat
 | `VITE_API_URL` (FE, **build-time**)           | `http://localhost:8080` | **rỗng** — ghim `ENV VITE_API_URL=""` trong `devforge-fe/Dockerfile`, không phải biến của môi trường nào (§9.1.1) | Dockerfile |
 | `IMAGE_REPO`                                  | —                       | `ghcr.io/<owner>` chữ thường | env file |
 | `IMAGE_TAG`                                   | —                       | `<sha>` — CD truyền vào lúc gọi `up.sh` | CD |
+
+⚠️ **`sslmode` là `disable` ở cả hai, và bảng này từng ghi `require` ở cột
+production — sai.** Container `postgres:16-alpine` không được cấu hình TLS ở đâu
+cả, nên `require` làm `migrate` chết ngay lần deploy đầu với `SSL is not enabled
+on the server`. Cái làm nó an toàn không phải TLS mà là phạm vi: kết nối không
+bao giờ rời mạng bridge của compose, và Postgres publish cổng ở `127.0.0.1` chứ
+không ra ngoài. Muốn thật sự bật TLS thì phải cấp cert cho chính container
+postgres trước — đó là một việc, không phải một chữ.
 
 **Nhóm SMTP là chỗ hỏng im lặng.** Local có Mailpit nuốt mọi thư nên không ai thấy thiếu; prod không có gì đứng thay, và mã xác thực với link reset mật khẩu là hai thứ duy nhất đi qua đường đó. Thiếu `SMTP_HOST` ở prod = người đăng ký mới không bao giờ vào được, không có lỗi nào nổ ở phía server.
 
@@ -171,7 +198,7 @@ commit được tag. Phải ép `--ff-only` vĩnh viễn để chống một v�
 
 ```
 pull_request                → chỉ kiểm, không build gì
-push master                 → kiểm → build → quét → push :sha-<short> → deploy STAGING
+push master                 → kiểm → build → quét → push :sha-<short> + :master → deploy STAGING
 push tag v* (CẢ HAI repo)   → promote :sha-<short> → :v1.2.0          → deploy PROD
 ```
 
@@ -187,10 +214,13 @@ chỉ khi push master và cả hai xanh:
   job images         → docker build --target prod --load   ← --load, CHƯA push
                        →  trivy image devforge-api
                        →  build 4 lab image  →  trivy image từng cái
-                       →  quét xong mới push :sha-<short>  ← đỏ thì registry không có gì
+                       →  quét xong mới push :sha-<short> VÀ :master
+                          ← đỏ thì registry không có gì
+                          ← :master vì up.sh deploy cả stack bằng MỘT tag, mà
+                            sha của be không phải sha của fe
   job deploy-staging → chưa có secret STAGING_SSH_HOST → bỏ qua, master vẫn xanh
                        →  ssh máy staging: checkout --force -B master origin/master
-                          IMAGE_TAG=sha-<short> ./deploy/up.sh
+                          IMAGE_TAG=master ./deploy/up.sh
 
 chỉ khi push tag `v*` và cả hai xanh:
   job promote → git merge-base --is-ancestor HEAD origin/master  ← tag phải trên master
@@ -355,11 +385,16 @@ sẽ lệch, và nó luôn là staging. Các dòng phải đổi nằm ở cuố
 | `OPENROUTER_API_KEY` | (rỗng, xem §9.6) | rỗng — đừng đốt tiền AI ở staging |
 | Email | Resend / Brevo | Mailpit, `COMPOSE_PROFILES=dev` |
 | Trigger deploy | push tag `v*` | push `master` |
-| Image | `:v1.2.0` | `:sha-<short>` — **cùng bit**, khác tên |
+| Image | `:v1.2.0` | `:master` — **cùng bit**, khác tên |
 
-Dòng cuối là điểm quan trọng nhất: tag chỉ **đổi tên** image staging bằng
-`imagetools create`, copy theo digest. "Đã test ở staging" vì thế là câu đúng về
+Dòng cuối là điểm quan trọng nhất: cả ba tên — `:sha-<short>`, `:master`,
+`:v1.2.0` — trỏ vào **cùng một digest**. `promote` dùng `imagetools create`,
+copy theo digest chứ không build lại. "Đã test ở staging" vì thế là câu đúng về
 bit, không phải về commit.
+
+Staging deploy bằng `:master` chứ không bằng `:sha-<short>` vì `up.sh` deploy cả
+sáu image dưới **một** `IMAGE_TAG`, mà sha của repo be không phải sha của repo
+fe — chi tiết ở §8 đầu mục.
 
 ⚠️ **Mailpit chỉ nghe `127.0.0.1`** (`docker-compose.yml`), vào hộp thư qua tunnel:
 
@@ -787,6 +822,7 @@ Giữ lại đây một dòng mỗi lỗi vì lý do vẫn còn giá trị; chi 
 | ☐ | Repo **fe**: không cần secret nào | `GITHUB_TOKEN` mặc định đủ quyền `packages: write` cho GHCR cùng owner |
 | ☐ | **Uptime monitor ngoài** ping `https://<domain>/readyz`, báo Telegram | 5 phút, và là thứ duy nhất báo được "máy chết" (§9.9). Đừng cài trên chính VPS. Không cần monitor cho staging |
 | ☐ | Kiểm cache rule Cloudflare **không phủ `/api/*`, `/ws/*`, `/uploads/*`** | Cùng origin nên cache rule phải theo path chứ không theo host. Cache `/api/*` là phát dữ liệu người này cho người kia (§9.5) |
+| ☐ | Bật **Authenticated Origin Pulls** ở Cloudflare, rồi bỏ comment hai dòng trong `deploy/nginx/devforge.conf` | Origin Cert chỉ chứng minh server với Cloudflare; nó **không** ngăn ai tìm ra IP thật rồi gọi thẳng, bỏ qua WAF và rate limit. Thứ tự bắt buộc: bật ở dashboard **trước**, xác nhận site còn phục vụ, rồi mới sửa nginx. Ngược lại là 400 cho tất cả |
 | ☐ | Sentry cho Go + React | Lỗi runtime kèm stacktrace, rẻ hơn nhiều so với dựng cả stack quan sát |
 
 ### 13.2 Repo `devforge-be` — file phải sửa
@@ -801,7 +837,7 @@ Giữ lại đây một dòng mỗi lỗi vì lý do vẫn còn giá trị; chi 
 | ✅ | `deploy/bootstrap.sh` | Docker: **kiểm rồi thoát**, không cài — hai bản cài trên một máy là chỗ `docker ps` và compose bất đồng ý ai giữ container. Bỏ clone fe; ghi chú tường lửa hPanel; swap 2 GB; lời nhắn cuối nói cert Origin thay vì ACME |
 | ✅ | `.env.prod.example` | `IMAGE_REPO` có; `PUBLIC_URL`/`FRONTEND_URL`/`CORS_ORIGINS`/`GOOGLE_REDIRECT_URL` đã khớp bảng §8; `ACME_EMAIL` đã bỏ; `MAX_CONTAINERS=12`; `LAB_SESSION_TTL=20m` |
 | ✅ | `.github/workflows/ci.yml` | Job `images` (master: build → quét → push `:sha-<short>`), job `promote` (tag: `imagetools create` sang `:v1.2.0`, đòi tag nằm trên master), job `deploy` (chờ `devforge-web:<tag>` rồi ssh, truyền `IMAGE_TAG`). Chỉ checkout clone be — repo fe không còn trên box |
-| ✅ | `.github/workflows/ci.yml` | `trivy image` chạy trên image `--load` **trước** bước push, cộng 4 lab image; `trivy fs` trong job `secrets`. Cờ: `--severity HIGH,CRITICAL --ignore-unfixed --exit-code 1` |
+| ✅ | `.github/workflows/ci.yml` | `trivy image` chạy trên image `--load` **trước** bước push, cộng 4 lab image; `trivy fs` và `trivy edge image` trong job `secrets`. Cờ: `--severity HIGH,CRITICAL --ignore-unfixed --exit-code 1`. ⚠️ Bước này **chưa từng chạy** cho tới 2026-09-18 vì tag action sai — xem §13.6 |
 | ✅ | `.github/workflows/ci.yml` | `go vet` → `golangci-lint run`; `go test` → `-coverprofile` + sàn **16.5%** (số của cây lúc thêm bước này là 16.8%). Bánh cóc: nâng khi coverage lên, không hạ để build xanh |
 | ✅ | `.trivyignore` | Rỗng có chủ ý, chỉ còn quy tắc: mỗi dòng bỏ qua **phải có `exp:<ngày>`** kèm lý do. Không hạn = tắt scanner cho CVE đó vĩnh viễn |
 | ✅ | `.golangci.yml` | v2, `default: standard` + `bodyclose`, `rowserrcheck`, `sqlclosecheck`, `errorlint`. Dùng preset loại trừ có sẵn thay vì danh sách tự chế. Cây đang **0 issue** — 5 lỗi thật đã vá: field `total` chết ở `streak.go`, `%v` → `%w` ở `simgen.go`, `client.IsErrNotFound` đã deprecated → `cerrdefs.IsNotFound`, thứ tự trả về của helper test |
@@ -845,25 +881,29 @@ Giữ lại đây một dòng mỗi lỗi vì lý do vẫn còn giá trị; chi 
 **Còn lại, theo thứ tự bắt buộc. Từ đây mọi bước đều cần máy:**
 
 ```
-1. Mua máy + DNS + Origin Cert          (13.1, phần hạ tầng)
-2. bootstrap.sh trên máy mới + .env + cert + IMAGE_TAG=<tag> up.sh chạy tay lần đầu
-3. R2 + chạy backup tay + DIỄN TẬP RESTORE   ← đừng để sau
-4. Đặt package GHCR sang Public, hoặc box phải docker login bằng PAT
-5. Bật CD, cắt một tag vô hại bằng `make release`, xem nó chạy hết đường
+0. Đặt 6 package GHCR sang Public        ← làm được NGAY, không cần máy
+1. Mua máy + DNS + Origin Cert           (13.1, phần hạ tầng)
+2. bootstrap.sh trên máy mới + .env + cert
+3. make release v=v0.1.0, rồi IMAGE_TAG=v0.1.0 up.sh chạy tay trên máy
+   ← phải là tag PHIÊN BẢN, không phải sha: §8 đầu mục nói vì sao
+   ← job deploy tự bỏ qua vì chưa có SSH_HOST, nên master vẫn xanh
+4. R2 + chạy backup tay + DIỄN TẬP RESTORE   ← đừng để sau
+5. Bật CD = thêm 3 secret SSH, rồi make release v=v0.1.1, xem nó chạy hết đường
 6. Diễn tập rollback bằng tay: IMAGE_TAG=<tag cũ> docker compose up -d --wait
-7. VPS thứ hai cho staging       ← đã chốt mua, §8 "Staging"
+7. Bật Authenticated Origin Pulls  ← sau khi site đã chạy, thứ tự ở DEPLOY.md §1
+8. VPS thứ hai cho staging       ← đã chốt mua, §8 "Staging"
    bootstrap.sh + .env theo khối STAGING ở cuối .env.prod.example
    DNS staging.<domain> + Google redirect URI thứ hai
-   3 secret STAGING_SSH_* → job deploy-staging tự bật
-8. SonarCloud                    ← đã có số coverage để gate
+   3 secret STAGING_SSH_* → job deploy-staging tự bật (deploy `:master`)
+9. SonarCloud                    ← đã có số coverage để gate
 ```
 
 Runbook từng bước: [deploy/DEPLOY.md](deploy/DEPLOY.md). Nó đánh số theo đúng
 danh sách này, cộng một mục cho lỗi 502-sau-deploy.
 
-Bước 3 và bước 6 là hai bước hay bị bỏ nhất và cũng là hai bước duy nhất chứng minh được lưới an toàn có thật.
+Bước 4 và bước 6 là hai bước hay bị bỏ nhất và cũng là hai bước duy nhất chứng minh được lưới an toàn có thật.
 
-⚠️ **Bước 5 có một cái bẫy của lần đầu.** `promote` đòi image `:sha-<short>` của commit được tag phải có sẵn trên GHCR, mà image chỉ được build khi push **master**. Nên tag đầu tiên phải cắt trên một commit đã đi qua master **sau khi** job `images` tồn tại. Tag một commit cũ hơn thì `promote` dừng và nói thẳng lý do.
+⚠️ **Bước 3 có một cái bẫy của lần đầu.** `promote` đòi image `:sha-<short>` của commit được tag phải có sẵn trên GHCR, mà image chỉ được build khi push **master**. Nên tag đầu tiên phải cắt trên một commit đã đi qua master **sau khi** job `images` tồn tại. Tag một commit cũ hơn thì `promote` dừng và nói thẳng lý do.
 
 ### 13.5 Kiểm chứng sau khi lên
 
@@ -889,7 +929,7 @@ Trên trình duyệt, những thứ chỉ hỏng ở prod nên phải nhìn tậ
 | Gom log / metric / alert (P3.5) | Chưa chặn việc lên prod. Làm ngay sau khi có người dùng thật |
 | ~~Uptime monitor ngoài~~ | Đã chuyển lên 13.1 — quá rẻ để xếp vào nợ |
 | ~~Sentry~~ | Đã chuyển lên 13.1, cùng lý do |
-| ~~trivy quét image~~ | **Đã làm.** Lý do cũ ("base chính thức") chỉ đúng cho image API distroless, không đúng cho 4 image lab nơi người lạ có shell. Giờ quét cả sáu image, trước bước push |
+| ~~trivy quét image~~ | **Đã làm — và lần chạy thật đầu tiên là 2026-09-18.** Từ lúc thêm cho tới hôm đó nó chưa từng thực thi: `aquasecurity/trivy-action@0.28.0` không phải tag có thật (upstream có `v` ở đầu), nên job chết ở "Set up job" trên mọi nhánh kể cả master. Lần chạy thật đầu tiên ra 3 CVE Go (2 CRITICAL ở `pgx`), 1 HIGH npm, 17 HIGH trong binary Caddy của image `devforge-web`, và 39 HIGH trong `nginx:1.27-alpine` mà biên đang ghim. Bài học không phải về trivy: **một bước CI chưa từng thấy đỏ cũng chưa từng thấy xanh** |
 | SonarCloud | `golangci-lint` + sàn coverage đã có, nên rào cản đã hết — còn lại là việc tạo tài khoản (§13.4 bước 8, SonarCloud). Tự dựng SonarQube thì **không bao giờ** trên box này — §9.4 |
 | Reconnect cho WebSocket chat | `LabTerminal` đã có; `src/api/chat.ts` dùng chung `terminalURL` nhưng chưa dùng chung phần thử lại. Ít đau hơn: mất một socket chat không giết một phiên lab |
 | ~~Staging BE~~ | **Hết là nợ.** Đã chốt mua VPS thứ hai và job `deploy-staging` đã có; còn lại là mua máy — §13.4 bước 7 |

@@ -81,6 +81,30 @@ jobs:
           trivyignores: .trivyignore
           exit-code: "1"
 
+      # The edge is the only container on the box with a published port, and it
+      # is the only image in the stack that nothing here ever looks at: it is
+      # pulled on the box, not built. That gap is not theoretical — the pin
+      # started life as nginx:1.27-alpine, which carries 39 fixable HIGH CVEs,
+      # and nothing in this pipeline would ever have said so.
+      #
+      # The tag is read out of the compose file rather than written here twice,
+      # so this cannot drift into scanning a version production does not run.
+      - id: edge
+        run: |
+          set -euo pipefail
+          tag=$(grep -oE 'nginx:[0-9.]+-alpine' docker-compose.prod.yml | head -1)
+          [ -n "$tag" ] || { echo "no pinned nginx image found in docker-compose.prod.yml" >&2; exit 1; }
+          echo "scanning the edge image production runs: $tag"
+          echo "image=$tag" >> "$GITHUB_OUTPUT"
+      - name: trivy edge image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.edge.outputs.image }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: "1"
+
   # Build once, here, and never on the box. Runs on master only: a tag does not
   # build anything, it promotes what master already produced (job `promote`).
   images:
@@ -146,14 +170,38 @@ jobs:
 
       - name: push
         run: |
-          docker push "$API_IMAGE:$SHA_TAG"
-          for img in linux git docker net; do
-            docker push "$LAB_PREFIX-$img:$SHA_TAG"
+          set -euo pipefail
+          images=("$API_IMAGE")
+          for img in linux git docker net; do images+=("$LAB_PREFIX-$img"); done
+
+          for repo in "${images[@]}"; do
+            docker push "$repo:$SHA_TAG"
+            # A moving :master tag as well, and it exists for exactly one
+            # reason: deploy/up.sh deploys the whole stack under ONE
+            # IMAGE_TAG, and this repo's short sha is not devforge-fe's.
+            # devforge-web:sha-<a be sha> does not exist and never will, so a
+            # sha can name this repo's images but cannot name a stack.
+            # :master is the one name both repos put on their newest master
+            # build, so it can.
+            #
+            # Production does not use it. Production deploys :vX.Y.Z, which
+            # `promote` copies from the exact sha that Trivy passed. A moving
+            # tag is right for a box that tracks a branch and wrong for one
+            # that ships a release — and it is why .image-tag on staging says
+            # `master` rather than something you can roll back to.
+            docker tag "$repo:$SHA_TAG" "$repo:master"
+            docker push "$repo:master"
           done
 
-  # Every green master push lands on staging, by :sha-<short> — the same image a
-  # tag later renames to :v1.2.0. That is what makes staging a rehearsal rather
-  # than a lookalike: QA and production run identical bits.
+  # Every green master push lands on staging, by the moving :master tag that the
+  # push step above also writes. The bits are the same ones :sha-<short> names
+  # and that a tag later renames to :v1.2.0, so staging stays a rehearsal rather
+  # than a lookalike — QA and production run identical images.
+  #
+  # Not :sha-<short>, even though that is the more precise name. up.sh deploys
+  # the whole stack under one IMAGE_TAG and devforge-web is built in the other
+  # repo under its own sha, so a sha tag names five of the six images and
+  # nothing for the sixth.
   #
   # Staging is its own VPS, not a second stack beside production. On one box the
   # two share a Docker daemon while keeping separate databases, and
@@ -187,14 +235,11 @@ jobs:
           SSH_USER: ${{ secrets.STAGING_SSH_USER }}
         run: |
           set -euo pipefail
-          # Same discipline as the production job: the tag is interpolated into a
-          # remote shell command, so it is checked before it gets there even
-          # though a git short sha cannot contain anything but hex.
-          TAG="sha-$(git rev-parse --short HEAD)"
-          case "$TAG" in
-            sha-[0-9a-f]*) [ -z "${TAG//[a-z0-9-]/}" ] || { echo "refusing tag: $TAG"; exit 1; } ;;
-            *) echo "refusing tag: $TAG"; exit 1 ;;
-          esac
+          # A constant, and still checked before it is interpolated into a
+          # remote shell command — the check is about the habit, not about
+          # this value. Staging tracks master, so the tag it deploys is the
+          # moving one both repos publish.
+          TAG=master
           install -d -m 700 ~/.ssh
           echo "${{ secrets.STAGING_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
@@ -291,7 +336,23 @@ jobs:
           echo "devforge-fe never published $TAG — a release tags BOTH repos with the same name" >&2
           exit 1
 
+      # Same reasoning as deploy-staging: before the box exists this step fails
+      # on every release tag, and the first thing a permanently-red job teaches
+      # is to stop reading it. The secret appearing is what turns production on.
+      #
+      # It sits AFTER the image gate on purpose. That gate is about the release
+      # being complete — both repos published the tag — and it is worth failing
+      # loudly even with nowhere to deploy to, because a half-tagged release is
+      # wrong whether or not there is a box.
+      - id: gate
+        run: |
+          if [ -z "${{ secrets.SSH_HOST }}" ]; then
+            echo "no SSH_HOST — production box not provisioned yet (INFRA.md §13.4), skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: ssh and release
+        if: steps.gate.outputs.skip != 'true'
         env:
           TAG: ${{ github.ref_name }}
         run: |

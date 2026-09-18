@@ -1,0 +1,40 @@
+# Why this exists: the edge image pin went stale without anyone noticing, and
+# there was nothing in the repository whose job it was to notice. `trivy edge
+# image` in ci.yml is the alarm; this is the thing that stops the alarm going
+# off in the first place.
+#
+# Monthly, not weekly. This is a two-person project and a pull request nobody
+# has time to read is worse than no pull request: it trains people to close
+# dependency bumps unread, which is exactly the habit that lets a CVE sit.
+version: 2
+updates:
+  # docker-compose.prod.yml is NOT covered here — Dependabot's docker ecosystem
+  # reads Dockerfiles, and the edge image lives in a compose file. That one is
+  # caught by `trivy edge image` in ci.yml instead, which fails the build rather
+  # than opening a pull request. Two mechanisms because there is no one
+  # mechanism that sees both places.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      # x/crypto, x/net and x/text move together and a CVE in one usually means
+      # a bump in all three. One pull request to read instead of three.
+      golang-x:
+        patterns: ["golang.org/x/*"]
+
+  # The reason this line is here: `aquasecurity/trivy-action@0.28.0` was pinned
+  # to a tag that never existed, so the scanner never ran on any branch, for
+  # months, silently. Dependabot would have opened a pull request against a
+  # reference it could not resolve long before anyone read a log.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
