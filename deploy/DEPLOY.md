@@ -29,10 +29,10 @@ Chín bước, và thứ tự là bắt buộc — INFRA.md §13.4 là bản g�
 1. Mua máy · DNS · Origin Cert                 §1
 2. bootstrap.sh trên máy mới                   §2
 3. .env + cert                                 §3
-4. Deploy tay lần đầu                          §4
+4. make release v0.1.0 → deploy tay lần đầu    §4
 5. Kiểm chứng                                  §5
 6. R2 + backup tay + DIỄN TẬP RESTORE          §6   ← đừng để sau
-7. Bật CD, cắt một tag                         §7
+7. Bật CD: thêm 3 secret SSH, cắt tag tiếp     §7
 8. Diễn tập rollback                           §8
 9. Máy staging                                 §9
 ```
@@ -89,6 +89,14 @@ Hạn 15 năm, không có ACME, không có challenge nào để hỏng.
 `/api/*` là phát response có `Set-Cookie` của người này cho người kia; rule sai
 còn phá được bước nâng cấp WebSocket của `/ws/*`. Chỉ cache `assets/*` và
 `index.html`.
+
+**Authenticated Origin Pulls** — nên bật, và bật **sau** khi site đã chạy. Nó
+chặn người tìm ra IP thật của VPS rồi gọi thẳng, bỏ qua WAF và rate limit;
+Origin Certificate không làm được việc đó vì client có quyền không kiểm cert.
+Cách bật nằm trong comment ở `deploy/nginx/devforge.conf`. Thứ tự quan trọng:
+bật ở dashboard Cloudflare **trước**, xác nhận site còn phục vụ, rồi mới bỏ
+comment hai dòng nginx và reload. Ngược lại thì nginx đòi client cert trong khi
+Cloudflare chưa gửi, và site trả 400 cho tất cả, kể cả bạn.
 
 **GHCR sang Public.** 6 package: `devforge-api`, `devforge-web`, và 4
 `devforge-lab-{linux,git,docker,net}`. ❗Không làm thì máy phải
@@ -185,11 +193,39 @@ xoá đúng hai thứ không có bản sao ở đâu.
 
 ## 4. Deploy tay lần đầu
 
-Chọn tag: một commit **đã đi qua master sau khi job `images` tồn tại**, vì
-`promote` đòi image `:sha-<short>` của commit đó có sẵn trên GHCR (§7 nói kỹ).
+⚠️ **Phải là tag phiên bản `vX.Y.Z`, không phải `sha-<short>`.** `up.sh` kéo
+`api`, `web` và 4 image lab bằng **cùng một** `IMAGE_TAG`. `api` và 4 image lab
+build ở repo be nên mang sha của be; `web` build ở repo fe nên mang sha của fe —
+hai con số khác nhau:
+
+```
+be  master  →  devforge-api:sha-226ed8d  +  4 × devforge-lab-*:sha-226ed8d
+fe  master  →  devforge-web:sha-33c8d37
+```
+
+`IMAGE_TAG=sha-<của be>` kéo được api và 4 lab rồi chết ở `devforge-web` không
+tồn tại. Tag phiên bản là **thứ duy nhất cả hai repo cùng promote**, và đó đúng
+là lý do nó tồn tại.
+
+Nên trước bước này phải cắt một tag:
 
 ```bash
-IMAGE_TAG=<tag> ./deploy/up.sh
+make release v=v0.1.0        # gắn tag CẢ HAI repo rồi push
+```
+
+Đợi `promote` xanh ở cả hai repo — nó tạo `:v0.1.0` từ `:sha-<short>` có sẵn.
+Job `deploy` cũng chạy theo tag, nhưng **tự bỏ qua khi chưa có secret
+`SSH_HOST`**, nên lúc này nó không làm gì và master vẫn xanh. Đó là điều kiện để
+bạn tự tay làm lần deploy đầu thay vì giao nó cho một job.
+
+⚠️ Bẫy của tag đầu tiên: `promote` đòi image `:sha-<short>` của commit được tag
+phải có sẵn trên GHCR, mà image chỉ build khi push **master**. Tag một commit cũ
+hơn job `images` thì `promote` dừng và nói thẳng lý do.
+
+Rồi trên máy:
+
+```bash
+IMAGE_TAG=v0.1.0 ./deploy/up.sh
 ```
 
 `up.sh` làm, theo thứ tự: khoá chống hai lần deploy chồng nhau → pull `api`,
@@ -294,22 +330,22 @@ migration đổi hình dạng schema.
 
 ## 7. Bật CD
 
-Thêm ba secret ở §1 rồi cắt một tag vô hại:
+Tới đây máy đã chạy `v0.1.0` do bạn tự deploy. Bật CD là **thêm ba secret**
+`SSH_HOST`, `SSH_USER`, `SSH_KEY` (§1) — job `deploy` đang tự bỏ qua vì thiếu
+chúng, và sự xuất hiện của `SSH_HOST` là thứ bật nó lên.
+
+Rồi cắt tag tiếp theo và xem nó chạy hết đường:
 
 ```bash
-make release v=v0.1.0
+make release v=v0.1.1
 ```
 
-`make release` gắn tag **cả hai repo** và đẩy, chặn tag trùng và cây bẩn.
+`images` → `promote` → `deploy` (chờ `devforge-web:v0.1.1` xuất hiện) → ssh →
+`up.sh`. Job `deploy` có `timeout 1800`, `ConnectTimeout=10`, `BatchMode=yes`,
+nên một máy treo không giữ runner sáu tiếng.
 
-⚠️ **Bẫy của lần đầu.** Job `promote` đòi image `:sha-<short>` của commit được
-tag phải có sẵn trên GHCR, mà image chỉ được build khi push **master**. Nên tag
-đầu tiên phải cắt trên một commit đã đi qua master **sau khi** job `images` tồn
-tại. Tag một commit cũ hơn thì `promote` dừng và nói thẳng lý do.
-
-Xem nó chạy hết đường: `images` → `promote` → `deploy` → ssh → `up.sh`. Job
-`deploy` có `timeout 1800`, `ConnectTimeout=10`, `BatchMode=yes`, nên một máy
-treo không giữ runner sáu tiếng.
+Lần này bạn đang xem CD làm đúng việc bạn vừa làm tay ở §4. So được hai bên là
+điểm của thứ tự này.
 
 ---
 
@@ -354,6 +390,12 @@ Google Console: URI thứ hai. Thiếu nó thì OAuth chết đúng ở staging.
 Ba secret `STAGING_SSH_HOST`, `STAGING_SSH_USER`, `STAGING_SSH_KEY` → job
 `deploy-staging` **tự bật**. Trước khi có chúng nó tự bỏ qua, nên master vẫn
 xanh trong lúc chưa mua máy.
+
+Staging deploy bằng tag trôi **`:master`**, không phải `:sha-<short>` — cả hai
+repo đẩy tag đó cho bản master mới nhất của mình, và nó là thứ duy nhất gọi tên
+được cả sáu image cùng lúc (§4 giải thích vì sao sha không làm được). Hệ quả:
+`.image-tag` trên staging ghi `master`, nên **staging không có đích rollback**.
+Đúng chủ ý — staging là máy dựng lại được, prod mới là máy cần lùi bản.
 
 ---
 
