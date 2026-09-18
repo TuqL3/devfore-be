@@ -1,0 +1,45 @@
+# golangci-lint replaces the `go vet` step rather than joining it: govet is one
+# of the linters it runs by default, so keeping both means running vet twice and
+# reading its output once.
+#
+# The set is deliberately small. A linter that fires on style nobody agreed to
+# gets muted with //nolint within a month, and a muted linter is worse than an
+# absent one — it looks like coverage.
+version: "2"
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    # An HTTP response body that is never closed leaks a connection from the
+    # pool. This codebase calls out to OpenRouter and probes its own /readyz.
+    - bodyclose
+    # rows.Err() after a database loop. Without it a query that dies halfway
+    # returns a short result set and no error at all — silent data loss in a
+    # report, and the labs repo iterates rows by hand.
+    - rowserrcheck
+    - sqlclosecheck
+    # errors.Is/As instead of == and type assertions. The domain layer already
+    # depends on errors.Is (domain.ErrNotFound, domain.ErrNotRunning) and a
+    # single == comparison against a wrapped error silently stops matching.
+    - errorlint
+
+  exclusions:
+    # The stock presets, not a hand-rolled list. `common-false-positives` is
+    # what silences `defer f.Close()` and friends — a deferred Close on a reader
+    # has nowhere to report to, and demanding a check there produces `_ =` noise
+    # rather than a caught bug. Everything they cover is a documented golangci
+    # exclusion, so it stays legible to anyone who did not write this file.
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # A test that ignores an error is usually asserting something else on the
+      # next line, and requiring the check there buys nothing. bodyclose is here
+      # for the same reason: the one hit is a websocket handshake response in a
+      # test process that exits seconds later, and closing it by hand to satisfy
+      # a linter is the kind of change that quietly breaks a dial.
+      - path: _test\.go
+        linters: [errcheck, bodyclose]

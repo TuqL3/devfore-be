@@ -16,7 +16,7 @@ APP_DIR=/opt/devforge
 echo "==> packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl git ufw fail2ban unattended-upgrades
+apt-get install -y -qq ca-certificates curl git ufw fail2ban unattended-upgrades cron
 
 echo "==> docker engine"
 if ! command -v docker >/dev/null; then
@@ -73,7 +73,7 @@ systemctl reload ssh || systemctl reload sshd
 
 echo "==> swap"
 # 24 GB of RAM does not need swap to run, but the Go and Vite builds run on
-# this box now (README §9.2) and a build OOM-killing Postgres is a worse
+# this box now (INFRA.md §9.2) and a build OOM-killing Postgres is a worse
 # outcome than a slow build.
 if ! swapon --show | grep -q .; then
   fallocate -l 4G /swapfile
@@ -82,6 +82,36 @@ if ! swapon --show | grep -q .; then
   swapon /swapfile
   echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
+
+echo "==> nightly backup cron"
+# This used to be a comment at the top of scripts/backup.sh telling a human to
+# install it. Following the setup exactly and still ending up with no backup at
+# all is not a setup step, so it happens here instead. The script itself no-ops
+# loudly until R2_* are filled in.
+#
+# The log file is created up front and owned by APP_USER: /var/log is root's,
+# and cron running as devforge cannot create the file it appends to.
+touch /var/log/devforge-backup.log
+chown "$APP_USER:$APP_USER" /var/log/devforge-backup.log
+chmod 640 /var/log/devforge-backup.log
+cat > /etc/cron.d/devforge-backup <<CRON
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+15 3 * * * $APP_USER cd $APP_DIR/devforge-be && ./scripts/backup.sh >> /var/log/devforge-backup.log 2>&1
+CRON
+chmod 644 /etc/cron.d/devforge-backup
+systemctl enable --now cron
+
+cat > /etc/logrotate.d/devforge-backup <<'ROTATE'
+/var/log/devforge-backup.log {
+  weekly
+  rotate 8
+  compress
+  missingok
+  notifempty
+  copytruncate
+}
+ROTATE
 
 echo "==> unattended security upgrades"
 dpkg-reconfigure -f noninteractive unattended-upgrades

@@ -5,7 +5,7 @@
 #
 # This is the first thing that has to work, not the last. The host is free-tier
 # with no SLA and an account that can be closed with no explanation: if that
-# happens, the dump on R2 is the only thing left (README §9.7).
+# happens, the dump on R2 is the only thing left (INFRA.md §9.7).
 #
 # Retention is an R2 lifecycle rule (delete after 30 days), not code here.
 set -euo pipefail

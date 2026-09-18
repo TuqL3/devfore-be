@@ -6,13 +6,20 @@
 # (in development both run on the host under air/vite), and Caddy is the only
 # thing on the network with a published port.
 services:
-  # Built on the box, not in Actions. The runner is amd64 and emulating arm64
-  # through QEMU takes ten times longer than four Ampere cores need to compile
-  # a static Go binary. See README §9.2.
+  # Pulled, never built here. Both the runner and the box are amd64, so there is
+  # no QEMU tax to avoid any more (INFRA.md §9.2), and the point of pulling is
+  # that the bits which ran through CI, Trivy and staging are the exact bits
+  # that serve production — a rebuild on the box is a different artifact with
+  # the same name.
+  #
+  # No `build:` key on purpose. With one present, `up` quietly builds whenever
+  # the image is missing locally, which puts the box back to compiling releases
+  # without anyone choosing that.
+  #
+  # IMAGE_TAG is required rather than defaulted: a default is how `latest` gets
+  # deployed by accident, and `latest` is what makes a rollback unrepeatable.
   api:
-    build:
-      context: .
-      target: prod
+    image: ${IMAGE_REPO:?set IMAGE_REPO in .env}/devforge-api:${IMAGE_TAG:?set IMAGE_TAG — deploy/up.sh does this}
     env_file: [.env]
     environment:
       # NOT 127.0.0.1 as in development. There the API runs on the host and
@@ -38,15 +45,14 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  # Vite bakes VITE_API_URL at build time, so this image is environment-bound
-  # and cannot be the same one development runs. Same domain, path-routed, so
-  # the value is a path and not a host — that is what keeps CORS out of prod.
+  # No build args, and none are possible: devforge-fe's Dockerfile pins
+  # VITE_API_URL to the empty string, so the bundle carries no environment and
+  # every call goes out relative against whatever origin served the page. That
+  # is what makes one FE image promotable from staging to production instead of
+  # one build per environment, and it is why the edge below routes /api, /ws
+  # and /uploads to the API on this same domain.
   web:
-    build:
-      context: ../devforge-fe
-      target: prod
-      args:
-        VITE_API_URL: https://${DOMAIN}/api
+    image: ${IMAGE_REPO:?set IMAGE_REPO in .env}/devforge-web:${IMAGE_TAG:?set IMAGE_TAG — deploy/up.sh does this}
     expose:
       - "80"
     restart: unless-stopped

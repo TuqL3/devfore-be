@@ -56,4 +56,9 @@ psql_as -d "$TARGET" -c \
    UNION ALL SELECT 'labs', count(*) FROM labs
    UNION ALL SELECT 'lab_task_completions', count(*) FROM lab_task_completions"
 
-[ "$DROP_FIRST" = 1 ] && echo "restore: drill only — live ${DB_NAME} untouched. Drop ${TARGET} when done."
+# Not `[ ... ] && echo`: on the --into-live branch the test is false, that is
+# the last command, and `set -e` turns the script's exit code into 1 — reading
+# as a failed restore at the exact moment someone is watching for one.
+if [ "$DROP_FIRST" = 1 ]; then
+  echo "restore: drill only — live ${DB_NAME} untouched. Drop ${TARGET} when done."
+fi

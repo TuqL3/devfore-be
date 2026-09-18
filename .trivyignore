@@ -1,0 +1,14 @@
+# Vulnerabilities Trivy is told to walk past, and for how long.
+#
+# EVERY LINE NEEDS A DATE. An entry with no expiry is not an exception, it is a
+# scanner that has been quietly switched off for that CVE forever — and the
+# whole reason for scanning is to notice when a base image goes bad six months
+# from now.
+#
+# Format (trivy reads `exp:` natively and starts reporting again after it):
+#
+#   CVE-2024-12345 exp:2026-12-31   # why, and what has to happen before then
+#
+# Scans already pass --ignore-unfixed, so anything landing here has a patch
+# available and was skipped on purpose. Empty on purpose: nothing has been
+# skipped yet, and it should stay that way for as long as possible.

@@ -10,3 +10,8 @@ tmp/
 .idea/
 *.swp
 uploads/
+
+# Written by deploy/up.sh on the box: the tag that is currently serving, and
+# therefore the rollback target. Machine state, not source.
+.image-tag
+cover.out

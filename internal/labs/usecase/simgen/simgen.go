@@ -140,7 +140,7 @@ func (s *Simgen) Generate(ctx context.Context, userID int64, in Input) (*Result,
 				"\nFix it and return the complete scenario."},
 		)
 	}
-	return nil, fmt.Errorf("%w: %v", ErrUnusable, lastErr)
+	return nil, fmt.Errorf("%w: %w", ErrUnusable, lastErr)
 }
 
 // trimHistory keeps the tail. The opening instruction matters less than the last
