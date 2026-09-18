@@ -72,7 +72,7 @@ jobs:
       # --ignore-unfixed is not optional. Without it CI goes red over CVEs that
       # have no patch to apply, and three weeks later somebody deletes the job.
       - name: trivy fs
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           scan-type: fs
           scan-ref: .
@@ -112,7 +112,7 @@ jobs:
       - name: build api
         run: docker build --target prod --load -t "$API_IMAGE:$SHA_TAG" .
       - name: trivy api
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: ${{ env.API_IMAGE }}:${{ env.SHA_TAG }}
           severity: HIGH,CRITICAL
