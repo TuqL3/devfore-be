@@ -1,4 +1,4 @@
-# Production edge. One domain, routed by path (README §8): no CORS, one cert.
+# Production edge. One domain, routed by path (INFRA.md §8): no CORS, one cert.
 # DOMAIN and ACME_EMAIL come from the env file through compose.
 #
 # The A record must already point at this box before the first `up`, or the

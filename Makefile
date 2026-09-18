@@ -85,3 +85,41 @@ air: ## Chạy api hot reload (host, cần `make up` trước)
 .PHONY: test
 test: ## Chạy test
 	go test ./...
+
+# The frontend clone. The directory name differs between the box (devforge-fe,
+# as README §11 and the deploy paths spell it) and some working copies cloned
+# under the repo slug, so take whichever is actually there rather than making
+# every developer edit this line.
+FE ?= $(firstword $(wildcard ../devforge-fe ../devfore-fe))
+
+# Same shape as `make test`, and the same precondition: this Makefile exports
+# .env, so the tests that skip themselves without a database will instead try to
+# reach one. Run `make up` first, or read the number CI prints.
+.PHONY: cover
+cover: ## Đo coverage như CI đo, sàn 16.5% (cần `make up` trước, như `make test`)
+	go test -coverprofile=cover.out ./...
+	@go tool cover -func=cover.out | tail -1
+
+# A release is one version number worn by both repos. Nothing enforces that in
+# git — two repositories have two independent tag namespaces and only the name
+# ties them together — so the forgettable half is scripted here. The gate that
+# catches it anyway lives in CI: devforge-be's deploy job waits for the frontend
+# image at the same tag and fails the release if it never appears.
+.PHONY: release
+release: ## Gắn tag cả hai repo rồi push: make release v=v1.2.0
+	@test -n "$(v)" || { echo "usage: make release v=v1.2.0"; exit 1; }
+	@test -n "$(FE)" || { echo "no frontend clone next to this one"; exit 1; }
+	@case "$(v)" in v[0-9]*) ;; *) echo "version must look like v1.2.0"; exit 1 ;; esac
+	@# Never move a tag that already exists. The image for it has been promoted
+	@# and possibly deployed; repointing the name makes that release
+	@# unreproducible and a rollback a guess. Cut v1.2.1 instead.
+	@for d in . $(FE); do \
+	  git -C $$d rev-parse -q --verify refs/tags/$(v) >/dev/null \
+	    && { echo "$$d already has $(v) — cut the next patch version instead"; exit 1; }; \
+	  test -z "$$(git -C $$d status --porcelain)" \
+	    || { echo "$$d has uncommitted changes"; exit 1; }; \
+	done; true
+	@for d in . $(FE); do \
+	  git -C $$d tag -a $(v) -m $(v) && git -C $$d push origin $(v) || exit 1; \
+	done
+	@echo "==> tagged $(v) in both repos; watch Actions for the promote and deploy"

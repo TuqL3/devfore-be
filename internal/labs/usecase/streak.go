@@ -55,8 +55,7 @@ func (l *Labs) Weekly(ctx context.Context, now time.Time) ([]domain.WeeklyLeader
 	}
 
 	type tally struct {
-		days  map[string]int
-		total int
+		days map[string]int
 	}
 	byPlayer := map[string]*tally{}
 	for _, r := range rows {

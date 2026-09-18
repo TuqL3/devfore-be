@@ -55,16 +55,16 @@ const goodJSON = `{
   ]
 }`
 
-func run(t *testing.T, answers ...string) (*Result, error, *fakeGen) {
+func run(t *testing.T, answers ...string) (*Result, *fakeGen, error) {
 	t.Helper()
 	gen := &fakeGen{answers: answers}
 	s := New(gen, &openQuota{})
 	res, err := s.Generate(context.Background(), 1, Input{Prompt: "dựng cho tôi pipeline node"})
-	return res, err, gen
+	return res, gen, err
 }
 
 func TestGenerateAcceptsARunnableScenario(t *testing.T) {
-	res, err, gen := run(t, goodJSON)
+	res, gen, err := run(t, goodJSON)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestGenerateRepairsFromTheEnginesOwnError(t *testing.T) {
 	// runner_count of 99 is over the ceiling CheckScenario enforces.
 	broken := strings.Replace(goodJSON, `"runner_count": 2`, `"runner_count": 99`, 1)
 
-	res, err, gen := run(t, broken, goodJSON)
+	res, gen, err := run(t, broken, goodJSON)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestGenerateRejectsAnExampleThatDoesNotParse(t *testing.T) {
 	bad := strings.Replace(goodJSON,
 		`steps: [checkout, npm-build]`, `steps: [checkout, deploy-to-mars]`, 1)
 
-	_, err, gen := run(t, bad, bad)
+	_, gen, err := run(t, bad, bad)
 	if !errors.Is(err, ErrUnusable) {
 		t.Fatalf("want ErrUnusable, got %v", err)
 	}
@@ -136,7 +136,7 @@ func TestGenerateRejectsAScenarioWithNoExamples(t *testing.T) {
     {"title":"① Nối tiếp","note":"một job làm hết","pipeline":"jobs:\n  ci:\n    steps: [checkout, npm-build]\n"}
   ]`, `"examples": []`, 1)
 
-	if _, err, _ := run(t, none, none); !errors.Is(err, ErrUnusable) {
+	if _, _, err := run(t, none, none); !errors.Is(err, ErrUnusable) {
 		t.Fatalf("want ErrUnusable, got %v", err)
 	}
 }
@@ -145,7 +145,7 @@ func TestGenerateRejectsDuplicateStepNames(t *testing.T) {
 	dup := strings.Replace(goodJSON,
 		`{"name":"npm-build","seconds":60`, `{"name":"checkout","seconds":60`, 1)
 
-	_, err, _ := run(t, dup, dup)
+	_, _, err := run(t, dup, dup)
 	if !errors.Is(err, ErrUnusable) || !strings.Contains(err.Error(), "declared twice") {
 		t.Fatalf("want a duplicate-name rejection, got %v", err)
 	}

@@ -6,6 +6,7 @@ package dockerx
 import (
 	"context"
 	"fmt"
+	cerrdefs "github.com/containerd/errdefs"
 	"io"
 	"time"
 
@@ -107,7 +108,7 @@ func ContainerName(sessionID string) string { return "devforge-lab-" + sessionID
 
 func (r *Runtime) Remove(ctx context.Context, containerID string) error {
 	err := r.c.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
-	if err != nil && !client.IsErrNotFound(err) {
+	if err != nil && !cerrdefs.IsNotFound(err) {
 		return fmt.Errorf("remove container: %w", err)
 	}
 	return nil
