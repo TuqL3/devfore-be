@@ -169,7 +169,7 @@ trước route bắt-tất-cả.
 Khi chốt domain:
 
 - `FRONTEND_URL` và `PUBLIC_URL` **trùng nhau**, cả hai là `https://<domain>`.
-- Google Console: redirect `https://<domain>/api/auth/google/callback`, khớp từng ký tự — cộng một URI thứ hai cho staging (§13.1).
+- Google Console: redirect `https://<domain>/api/auth/google/callback`, khớp từng ký tự. Một cái là đủ — URI thứ hai chỉ cần khi dựng staging, đang hoãn.
 - DNS: một bản ghi `A` cho `<domain>`, mây cam (§9.5). Không có `api.` nào để tạo.
 - `VITE_API_URL` không phải biến của môi trường nào — ghim rỗng trong `devforge-fe/Dockerfile`.
 
@@ -300,8 +300,8 @@ nếu bản phát hành nào chạm trần thì chỗ cần nâng là đây.
 do người deploy đầu tiên tạo, một lần `sudo ./deploy/up.sh` để lại file
 `root:root 0644` và mọi lần CD sau đó chết ở `Permission denied`.
 
-**Merge vào `master` build, quét và lên staging — nhưng không lên prod.** Prod chỉ
-ra bản mới khi có người gắn tag (`make release v=v1.2.0`). Hệ quả:
+**Merge vào `master` không build gì và không deploy đi đâu.** Prod chỉ ra bản mới
+khi có người gắn tag (`make release v=v1.2.0`). Hệ quả:
 
 - `master` là nhánh *deploy được*, không phải nhánh *đã deploy*. Cái đang chạy trên prod là tag gần nhất, không phải HEAD của `master`.
 - `images` đòi `merge-base --is-ancestor` trước khi build, nên tag cắt từ nhánh phụ bị từ chối kể cả khi commit đó xanh — và bị từ chối *trước* khi tốn mười phút build.
@@ -369,7 +369,11 @@ Cái SonarQube Cloud hơn `golangci-lint` + ngưỡng coverage là lịch sử, 
 
 ---
 
-### Staging — VPS thứ hai
+### Staging — VPS thứ hai, HOÃN
+
+> **Chưa dựng.** Quyết định ngày 2026-09-21: tạm thời không làm staging. Mục này
+> giữ nguyên vì lý do bên dưới không sai đi — nó chỉ chưa được trả. Cái đang gánh
+> rủi ro thay nó là production.
 
 Lý do cần nằm ngay trong §9.5: hai lỗi mô tả ở đó *"chỉ nổ sau khi deploy (dev FE
 gọi thẳng `:8080` nên không thấy)"*. Cùng loại với chúng, và cũng chỉ lộ ra sau
@@ -379,10 +383,11 @@ khi lên máy thật:
 · OAuth redirect URI thật · cert Origin + mây cam · khối bot đứng trước route
 bắt-tất-cả · migration ba bước tương thích ngược · và chính cái rollback theo tag.
 
-**Đã chốt: một VPS thứ hai, loại nhỏ nhất.** Hai phương án rẻ hơn đều hỏng theo
-cách không sửa được bằng cấu hình: không dựng staging thì mọi thứ trong danh sách
-trên vẫn chỉ lộ ở prod; dựng stack thứ hai trên cùng máy thì cắt thẳng vào ghế lab
-của prod (KVM2 có 2 vCPU, §9.4 chốt trần là CPU) **và** dính bẫy đếm ghế dưới đây.
+**Phương án đúng vẫn là một VPS thứ hai, loại nhỏ nhất** — và nó đang bị hoãn,
+nên cái giá ở gạch đầu dòng thứ nhất là cái đang phải trả: mọi thứ trong danh
+sách trên chỉ lộ ra ở prod. Gạch thứ hai vẫn là đường cụt kể cả khi muốn làm rẻ:
+dựng stack thứ hai trên cùng máy thì cắt thẳng vào ghế lab của prod (KVM2 có 2
+vCPU, §9.4 chốt trần là CPU) **và** dính bẫy đếm ghế dưới đây.
 
 ⚠️ **Bẫy đếm ghế — lý do chính loại phương án cùng máy.**
 `internal/labs/adapter/repo/session.go:183` đếm ghế từ **database của chính nó**,
@@ -434,16 +439,17 @@ ssh -L 8025:127.0.0.1:8025 <user>@<staging host>    # rồi mở localhost:8025
 đọc được, mà trong đó có mã xác minh và link đặt lại mật khẩu.
 
 Thứ tự: **dựng prod cho xong trước.** Staging tồn tại để diễn tập một pipeline đã
-có; dựng nó trước là diễn tập cho thứ chưa viết.
+có; dựng nó trước là diễn tập cho thứ chưa viết. Hiện tại bước thứ hai đang hoãn
+vô thời hạn, nên prod là máy duy nhất.
 
 ---
 
 ## 9. Hạ tầng production
 
 > **Đã đổi phương án.** Oracle Always Free / Caddy là thiết kế cũ và **chưa từng
-> dựng thật**. Quyết định hiện tại: **hai VPS Hostinger (prod + staging), nginx ở
-> biên, FE và API cùng một origin**, image build ở Actions và pull từ GHCR. Việc
-> phải làm để chuyển sang nằm ở §13.
+> dựng thật**. Quyết định hiện tại: **một VPS Hostinger (prod; staging hoãn),
+> nginx ở biên, FE và API cùng một origin**, image build ở Actions và pull từ
+> GHCR. Việc phải làm để chuyển sang nằm ở §13.
 
 ### 9.0 Toàn cảnh
 
@@ -455,12 +461,12 @@ có; dựng nó trước là diễn tập cho thứ chưa viết.
         ▼                                           ▼
    <domain>                                  staging.<domain>
    ┌────────────────────────────────────┐    ┌──────────────────────┐
-   │ VPS prod — 2 vCPU / 8 GB, SG       │    │ VPS staging — nhỏ    │
+   │ VPS prod — 2 vCPU / 8 GB, SG       │    │ HOÃN — chưa dựng     │
    │                                    │    │ cùng compose,        │
-   │  nginx  real_ip CF-Connecting-IP   │    │ khác .env            │
-   │    │    /ws/: buffering off        │    │ image :vX.Y.Z        │
-   │    ├──► web  (SPA tĩnh)            │    │ không backup         │
-   │    └──► api  (Go, distroless)      │    │ mailpit ở 127.0.0.1  │
+   │  nginx  real_ip CF-Connecting-IP   │    │ khác .env, khi nào   │
+   │    │    /ws/: buffering off        │    │ cần thì §8 "Staging" │
+   │    ├──► web  (SPA tĩnh)            │    │                      │
+   │    └──► api  (Go, distroless)      │    │                      │
    │           ├── postgres  loopback   │    └──────────────────────┘
    │           ├── redis     loopback   │
    │           └── docker-socket-proxy  │
@@ -599,7 +605,7 @@ arm64 của bản cũ bỏ đi vì không còn tác dụng.
 | Khoản | Dịch vụ | Giá |
 | --- | --- | --- |
 | **Máy chủ prod** | Hostinger KVM2 Singapore | **trả tiền** — kiểm lúc mua |
-| **Máy chủ staging** | VPS loại nhỏ nhất, máy riêng (§8 "Staging") | **trả tiền** — ⏳ chưa mua |
+| ~~**Máy chủ staging**~~ | ~~VPS loại nhỏ nhất, máy riêng (§8 "Staging")~~ | **0₫ — hoãn**, không mua lúc này |
 | **Tên miền** | | **~300k₫/năm** |
 | TLS | Cloudflare Origin Certificate | 0₫ |
 | DNS + proxy | Cloudflare Free | 0₫ |
@@ -838,13 +844,13 @@ Giữ lại đây một dòng mỗi lỗi vì lý do vẫn còn giá trị; chi 
 | | Việc | Ghi chú |
 | --- | --- | --- |
 | ☐ | Mua VPS Hostinger **KVM2, vùng Singapore**, template Ubuntu 24.04 **có sẵn Docker** | Máy prod. Kiểm giá gia hạn, không chỉ giá khuyến mãi |
-| ☐ | Mua **VPS thứ hai, loại nhỏ nhất**, cùng vùng | Máy staging (§8 "Staging"). Máy riêng chứ không phải stack thứ hai — lý do ở đúng mục đó |
+| ~~☐~~ | ~~Mua **VPS thứ hai, loại nhỏ nhất**~~ | **Hoãn** (2026-09-21). Khi nào làm thì §8 "Staging" — máy riêng chứ không phải stack thứ hai, lý do ở đúng mục đó |
 | ☐ | Mở **80 và 443 trong tường lửa hPanel** | Lớp cửa thứ nhất — `ufw` là lớp thứ hai, quên lớp nào cũng không vào được (§9.1) |
 | ☐ | Bật **snapshot/backup tuần** của Hostinger | Không thay R2, xem §9.7 |
-| ☐ | DNS Cloudflare: `<domain>` A → IP VPS prod, `staging.<domain>` A → IP VPS staging | **Cả hai mây cam.** Không còn bản ghi `api.` nào để tạo (§9.1.1) |
+| ☐ | DNS Cloudflare: `<domain>` A → IP VPS prod | **Mây cam.** Chỉ một bản ghi — `staging.` để lúc nào dựng staging. Không còn bản ghi `api.` nào để tạo (§9.1.1) |
 | ☐ | Tạo **Cloudflare Origin Certificate** cho `<domain>` + `*.<domain>` | Lưu vào `deploy/nginx/certs/`, key `chmod 600` |
 | ☐ | Đặt package GHCR (`devforge-api`, `devforge-web`, 4 `devforge-lab-*`) sang **Public** | ❗Không làm thì box phải `docker login ghcr.io` bằng PAT chỉ để pull bản phát hành của chính mình |
-| ☐ | Google Console: đăng ký **hai** redirect URI — `https://<domain>/api/auth/google/callback` và `https://staging.<domain>/...` | Khớp từng ký tự. Thiếu cái thứ hai thì OAuth chết đúng ở staging |
+| ☐ | Google Console: đăng ký redirect URI `https://<domain>/api/auth/google/callback` | Khớp từng ký tự. **Một cái là đủ** — cái thứ hai chỉ cần khi dựng staging, đang hoãn |
 | ☐ | Tạo bucket **R2** + lifecycle xoá sau 30 ngày | Nếu chưa có |
 | ☐ | Secrets repo **be**: `SSH_HOST`, `SSH_USER`, `SSH_KEY` (prod) | Khoá deploy riêng, không dùng lại khoá cá nhân |
 | ~~☐~~ | ~~Secrets repo **be**: `STAGING_SSH_*`~~ | Không còn dùng. Job `deploy-staging` đã bị bỏ — staging deploy bằng tay, cùng tag với production |
@@ -920,10 +926,10 @@ Giữ lại đây một dòng mỗi lỗi vì lý do vẫn còn giá trị; chi 
 5. Bật CD = thêm 3 secret SSH, rồi make release v=v0.1.1, xem nó chạy hết đường
 6. Diễn tập rollback bằng tay: IMAGE_TAG=<tag cũ> docker compose up -d --wait
 7. Bật Authenticated Origin Pulls  ← sau khi site đã chạy, thứ tự ở DEPLOY.md §1
-8. VPS thứ hai cho staging       ← tuỳ chọn, §8 "Staging"
-   bootstrap.sh + .env theo khối STAGING ở cuối .env.prod.example
+8. VPS thứ hai cho staging       ← HOÃN (2026-09-21), không nằm trong đường lên prod
+   khi nào cần: bootstrap.sh + khối STAGING cuối .env.prod.example
    DNS staging.<domain> + Google redirect URI thứ hai
-   deploy bằng tay: IMAGE_TAG=<tag> ./deploy/up.sh — không còn job tự động
+   deploy bằng tay: IMAGE_TAG=<tag> ./deploy/up.sh — không có job tự động
 9. SonarQube Cloud: tạo tài khoản, bind 2 repo, dán SONAR_TOKEN
    ← job `sonar` đã có sẵn và đang tự bỏ qua; token là thứ bật nó lên
    ← đối chiếu sonar.projectKey/sonar.organization với UI ở lần chạy đầu
@@ -963,5 +969,5 @@ Trên trình duyệt, những thứ chỉ hỏng ở prod nên phải nhìn tậ
 | ~~trivy quét image~~ | **Đã làm — và lần chạy thật đầu tiên là 2026-09-18.** Từ lúc thêm cho tới hôm đó nó chưa từng thực thi: `aquasecurity/trivy-action@0.28.0` không phải tag có thật (upstream có `v` ở đầu), nên job chết ở "Set up job" trên mọi nhánh kể cả master. Lần chạy thật đầu tiên ra 3 CVE Go (2 CRITICAL ở `pgx`), 1 HIGH npm, 17 HIGH trong binary Caddy của image `devforge-web`, và 39 HIGH trong `nginx:1.27-alpine` mà biên đang ghim. Bài học không phải về trivy: **một bước CI chưa từng thấy đỏ cũng chưa từng thấy xanh** |
 | ~~SonarCloud~~ | **Hết là nợ.** Job `sonar` đã có ở cả hai repo, gate chặn bằng `sonar.qualitygate.wait=true`, và nó tự bỏ qua tới khi có `SONAR_TOKEN` — §13.4 bước 9. Tự dựng SonarQube thì **không bao giờ** trên box này, §9.4 |
 | Reconnect cho WebSocket chat | `LabTerminal` đã có; `src/api/chat.ts` dùng chung `terminalURL` nhưng chưa dùng chung phần thử lại. Ít đau hơn: mất một socket chat không giết một phiên lab |
-| Staging BE | **Quay lại thành nợ, nhỏ hơn.** Job `deploy-staging` đã bị bỏ khi nhánh thôi build — nó deploy tag trôi `:master` mà giờ không ai đẩy nữa. Máy staging vẫn dựng được bằng `bootstrap.sh` và deploy bằng tay với đúng tag production dùng; cái mất là phần tự động |
+| Staging BE | **Nợ, và đang cố ý không trả** (2026-09-21). Hai thứ đã mất: job `deploy-staging` bị bỏ khi nhánh thôi build (nó deploy tag trôi `:master`, giờ không ai đẩy), và máy thì hoãn mua. Hệ quả duy nhất đáng nhớ: **production là máy thật đầu tiên mà mọi lỗi cấu hình biên sẽ lộ ra**. Dựng lại được bất cứ lúc nào bằng `bootstrap.sh` + deploy tay với đúng tag prod dùng |
 | Bỏ Redis (dồn session vào Postgres) | Đang chạy, 0 cấu hình. Lãi một container, không đáng ưu tiên |
