@@ -82,6 +82,10 @@ check-sim: ## Chấm thử mọi nhiệm vụ mô phỏng: pipeline sai phải t
 check-edge: ## Kiểm route của deploy/nginx/devforge.conf (cần docker; chỉ prod mới có edge)
 	./scripts/edge-routes.check.sh
 
+.PHONY: check-release-guard
+check-release-guard: ## Kiểm scripts/release-guard.sh — tên tag nào được phép thành bản phát hành
+	./scripts/release-guard.check.sh
+
 .PHONY: air
 air: ## Chạy api hot reload (host, cần `make up` trước)
 	air
@@ -113,10 +117,12 @@ cover: ## Đo coverage như CI đo, sàn 16.5% (cần `make up` trước, như `
 release: ## Gắn tag cả hai repo rồi push: make release v=v1.2.0
 	@test -n "$(v)" || { echo "usage: make release v=v1.2.0"; exit 1; }
 	@test -n "$(FE)" || { echo "no frontend clone next to this one"; exit 1; }
-	@case "$(v)" in v[0-9]*) ;; *) echo "version must look like v1.2.0"; exit 1 ;; esac
-	@# Never move a tag that already exists. The image for it has been promoted
-	@# and possibly deployed; repointing the name makes that release
-	@# unreproducible and a rollback a guess. Cut v1.2.1 instead.
+	@# Same guard CI runs, so a name that is refused here is refused there and
+	@# a name accepted here cannot surprise the deploy job.
+	@./scripts/release-guard.sh "$(v)"
+	@# Never move a tag that already exists. The image for it has been built and
+	@# possibly deployed; repointing the name makes that release unreproducible
+	@# and a rollback a guess. Cut v1.2.1 instead.
 	@for d in . $(FE); do \
 	  git -C $$d rev-parse -q --verify refs/tags/$(v) >/dev/null \
 	    && { echo "$$d already has $(v) — cut the next patch version instead"; exit 1; }; \
