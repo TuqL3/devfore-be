@@ -57,6 +57,54 @@ jobs:
             printf "coverage %.1f%% (floor %.1f%%)\n", p, f
           }'
 
+      # Handed to the `sonar` job, which runs on its own machine and would
+      # otherwise have to re-run the whole suite to produce the same file.
+      # Uploading it also means Sonar reports the exact number the floor above
+      # gates on, rather than a second measurement that can drift from it.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: cover.out
+          retention-days: 1
+
+  # Code quality, and the third gate next to golangci-lint and Trivy. It is the
+  # only one of the three that looks at the shape of the code rather than at a
+  # rule list or a CVE feed.
+  #
+  # Self-skips without SONAR_TOKEN, the same way deploy and deploy-staging skip
+  # without their SSH secrets: the project does not exist on SonarQube Cloud
+  # yet, and a job that is red on every branch until someone signs up teaches
+  # people to stop reading CI.
+  sonar:
+    needs: [be]
+    runs-on: ubuntu-latest
+    steps:
+      - id: gate
+        run: |
+          if [ -z "${{ secrets.SONAR_TOKEN }}" ]; then
+            echo "no SONAR_TOKEN — SonarQube Cloud project not set up yet (INFRA.md §13.4), skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v7
+        if: steps.gate.outputs.skip != 'true'
+        with:
+          # Sonar reads git history to decide what is new code, and the whole
+          # point of the gate is that it judges the diff rather than the
+          # accumulated past. A shallow clone makes every line look new.
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        if: steps.gate.outputs.skip != 'true'
+        with:
+          name: coverage
+      # No SONAR_HOST_URL: that variable is for a self-hosted server, and
+      # setting it points the scanner away from Cloud. Everything else the
+      # scanner needs is in sonar-project.properties, including
+      # sonar.qualitygate.wait, which is what fails this job on a red gate.
+      - uses: SonarSource/sonarqube-scan-action@v8.2.2
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
   secrets:
     runs-on: ubuntu-latest
     # gitleaks lists the commits on the pull request to decide what to scan, and
