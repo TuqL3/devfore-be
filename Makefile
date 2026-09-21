@@ -132,4 +132,4 @@ release: ## Gắn tag cả hai repo rồi push: make release v=v1.2.0
 	@for d in . $(FE); do \
 	  git -C $$d tag -a $(v) -m $(v) && git -C $$d push origin $(v) || exit 1; \
 	done
-	@echo "==> tagged $(v) in both repos; watch Actions for the promote and deploy"
+	@echo "==> tagged $(v) in both repos; Actions now builds, scans and pushes both, then deploys"
