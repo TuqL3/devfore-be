@@ -12,7 +12,16 @@ useDefault = true
 #
 # Scoped to the two property names rather than to the whole file, so a real key
 # committed into sonar-project.properties later is still caught.
-[[allowlists]]
+#
+# `[allowlist]` singular, not `[[allowlists]]`. The plural array-of-tables form
+# is parsed without complaint by the gitleaks 8.24.3 that gitleaks-action
+# installs and then ignored, so the finding survives and the job stays red for
+# no visible reason. The singular form is honoured by both 8.24.3 and 8.30.x.
+#
+# `(?m)` is load-bearing: `^` on its own anchors to the start of the scanned
+# fragment rather than to each line, which silences the key only when it
+# happens to sit on line 1.
+[allowlist]
 description = "SonarQube Cloud project and organization keys are public identifiers"
 regexTarget = "line"
 regexes = ['''(?m)^sonar\.(projectKey|organization)=''']
