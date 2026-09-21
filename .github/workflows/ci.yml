@@ -2,9 +2,15 @@ name: CI
 
 on:
   push:
-    # The default branch is master. Watching main meant every merge landed
-    # without CI ever running; only the pull_request trigger was doing any work.
-    branches: [master]
+    # develop integrates, master is production. Both are watched, and the
+    # difference between them is not in this block — it is the `if:` guard on
+    # the jobs that build. Every job without a guard runs on both; images and
+    # deploy-staging are master-only. A push to develop therefore checks the
+    # code and builds nothing.
+    #
+    # Watching `main` meant every merge landed without CI ever running, and
+    # only the pull_request trigger was doing any work. Neither branch is main.
+    branches: [master, develop]
     # Production releases are cut by tag, not by merge: master stays green and
     # deployable, but nothing reaches the box until someone names a version.
     tags: ["v*"]

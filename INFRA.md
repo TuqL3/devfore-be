@@ -190,17 +190,34 @@ Deploy 3:  DROP COLUMN user_name; code chỉ dùng username
 
 ### CI/CD — hai repo, gặp nhau ở registry
 
-**Một nhánh dài, không có `develop`.** `develop` tồn tại để che master, mà master
-ở đây đã được che bằng thứ khác: merge vào master không deploy production, chỉ tag
-mới deploy. Giữ thêm một nhánh dài thì rước đúng một cái bẫy — merge
-`develop → master` đẻ merge commit, SHA đổi, và image mang SHA cũ không còn khớp
-commit được tag. Phải ép `--ff-only` vĩnh viễn để chống một vấn đề tự mình tạo ra.
+**Hai nhánh dài: `develop` tích hợp, `master` production.**
+
+Trước đây chỗ này chỉ có master, với lập luận: thêm `develop` là rước một cái
+bẫy — merge `develop → master` đẻ merge commit, SHA đổi, image mang SHA cũ
+không còn khớp commit được tag, nên phải ép `--ff-only` vĩnh viễn để chống một
+vấn đề tự mình tạo ra.
+
+Lập luận đó chỉ đúng nếu **develop build image**. Ở đây nó không build gì: mọi
+job có guard `refs/heads/master` đều bỏ qua develop, nên develop không sinh ra
+image nào để lệch. Merge commit trên master được build như mọi commit master
+khác và mang SHA của chính nó; `promote` tra đúng SHA đó. Cái bẫy tan, và
+`--ff-only` là thứ không cần tới.
+
+Cái giá còn lại là thật và nhỏ, và nó không nằm ở build: một thay đổi vẫn chỉ
+build đúng một lần, lúc master nhận merge. Thứ chạy hai lần là **phần kiểm** —
+một lần ở PR vào develop, một lần nữa khi develop nhận merge đó. Vài phút
+runner, đổi lấy việc develop luôn có trạng thái xanh của chính nó chứ không chỉ
+của từng PR rời rạc.
 
 ```
 pull_request                → chỉ kiểm, không build gì
+push develop                → chỉ kiểm, không build gì   ← giống hệt PR
 push master                 → kiểm → build → quét → push :sha-<short> + :master → deploy STAGING
 push tag v* (CẢ HAI repo)   → promote :sha-<short> → :v1.2.0          → deploy PROD
 ```
+
+Tag chỉ cắt trên master. `promote` tự chặn tag không thuộc master bằng
+`git merge-base --is-ancestor`, nên quy ước này không dựa vào trí nhớ ai cả.
 
 Repo `devforge-be`:
 
