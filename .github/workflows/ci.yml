@@ -2,9 +2,15 @@ name: CI
 
 on:
   push:
-    # The default branch is master. Watching main meant every merge landed
-    # without CI ever running; only the pull_request trigger was doing any work.
-    branches: [master]
+    # develop integrates, master is production. Both are watched, and the
+    # difference between them is not in this block — it is the `if:` guard on
+    # the jobs that build. Every job without a guard runs on both; images and
+    # deploy-staging are master-only. A push to develop therefore checks the
+    # code and builds nothing.
+    #
+    # Watching `main` meant every merge landed without CI ever running, and
+    # only the pull_request trigger was doing any work. Neither branch is main.
+    branches: [master, develop]
     # Production releases are cut by tag, not by merge: master stays green and
     # deployable, but nothing reaches the box until someone names a version.
     tags: ["v*"]
@@ -159,10 +165,17 @@ jobs:
           trivyignores: .trivyignore
           exit-code: "1"
 
-  # Build once, here, and never on the box. Runs on master only: a tag does not
-  # build anything, it promotes what master already produced (job `promote`).
+  # A tag is the only thing that builds. Pushes to develop and to master are
+  # checked and nothing else: no image, no registry write, nothing reaching a
+  # box. The version number therefore exists before the bits do, which is why
+  # the images are named after it directly and there is no sha tag to promote.
+  #
+  # The cost of building here rather than earlier is that the base images are
+  # pinned to a minor line (golang:1.26-alpine), so a release build can pull
+  # patch layers that nothing has run before. Trivy still gates the push, so
+  # that surfaces as a failed release rather than as a shipped one.
   images:
-    if: github.ref == 'refs/heads/master'
+    if: github.ref_type == 'tag'
     needs: [be, secrets]
     runs-on: ubuntu-latest
     permissions:
@@ -170,29 +183,47 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: lowercase image names
+      # Both refusals below used to live in the `promote` job. That job is gone
+      # — there is no pre-built image left to promote — but the two rules it
+      # enforced are not, so they moved here, in front of the build rather than
+      # after it.
+      - name: check the tag, then name the images after it
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
+          # Checked here, in front of a ten-minute build, not after it.
+          # scripts/release-guard.check.sh is what holds this rule honest.
+          ./scripts/release-guard.sh "$TAG"
+          # A tag on a commit that never reached master was never reviewed and
+          # never merged. Refuse to build it at all rather than publish an
+          # image nobody agreed to.
+          git fetch origin master
+          git merge-base --is-ancestor HEAD origin/master \
+            || { echo "tag $TAG is not on master"; exit 1; }
           {
             echo "API_IMAGE=${API_IMAGE,,}"
             echo "LAB_PREFIX=${LAB_PREFIX,,}"
-            echo "SHA_TAG=sha-$(git rev-parse --short HEAD)"
+            echo "TAG=$TAG"
           } >> "$GITHUB_ENV"
 
       # --load, not --push: the image has to exist locally for Trivy to read it,
       # and the whole point is that nothing reaches the registry until it has
       # been scanned. A scan after the push is a report, not a gate.
       - name: build api
-        run: docker build --target prod --load -t "$API_IMAGE:$SHA_TAG" .
+        run: docker build --target prod --load -t "$API_IMAGE:$TAG" .
       - name: trivy api
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.API_IMAGE }}:${{ env.SHA_TAG }}
+          image-ref: ${{ env.API_IMAGE }}:${{ env.TAG }}
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           trivyignores: .trivyignore
@@ -210,7 +241,7 @@ jobs:
       - name: build lab images
         run: |
           for img in linux git docker net; do
-            docker build -f "labs/$img/Dockerfile" --load -t "$LAB_PREFIX-$img:$SHA_TAG" labs
+            docker build -f "labs/$img/Dockerfile" --load -t "$LAB_PREFIX-$img:$TAG" labs
           done
       - name: trivy lab images
         run: |
@@ -219,7 +250,7 @@ jobs:
               -v "$PWD/.trivyignore:/.trivyignore" \
               aquasec/trivy:0.58.1 image --scanners vuln \
               --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
-              --ignorefile /.trivyignore "$LAB_PREFIX-$img:$SHA_TAG"
+              --ignorefile /.trivyignore "$LAB_PREFIX-$img:$TAG"
           done
 
       - name: push
@@ -227,146 +258,30 @@ jobs:
           set -euo pipefail
           images=("$API_IMAGE")
           for img in linux git docker net; do images+=("$LAB_PREFIX-$img"); done
-
+          # One name only. The moving :master tag that used to be written here
+          # existed so a stack could be deployed under a single IMAGE_TAG while
+          # this repo's short sha differed from devforge-fe's. A version tag is
+          # already a name both repos share, so the moving tag has nothing left
+          # to do — and unlike :master it is something you can roll back to.
           for repo in "${images[@]}"; do
-            docker push "$repo:$SHA_TAG"
-            # A moving :master tag as well, and it exists for exactly one
-            # reason: deploy/up.sh deploys the whole stack under ONE
-            # IMAGE_TAG, and this repo's short sha is not devforge-fe's.
-            # devforge-web:sha-<a be sha> does not exist and never will, so a
-            # sha can name this repo's images but cannot name a stack.
-            # :master is the one name both repos put on their newest master
-            # build, so it can.
-            #
-            # Production does not use it. Production deploys :vX.Y.Z, which
-            # `promote` copies from the exact sha that Trivy passed. A moving
-            # tag is right for a box that tracks a branch and wrong for one
-            # that ships a release — and it is why .image-tag on staging says
-            # `master` rather than something you can roll back to.
-            docker tag "$repo:$SHA_TAG" "$repo:master"
-            docker push "$repo:master"
-          done
-
-  # Every green master push lands on staging, by the moving :master tag that the
-  # push step above also writes. The bits are the same ones :sha-<short> names
-  # and that a tag later renames to :v1.2.0, so staging stays a rehearsal rather
-  # than a lookalike — QA and production run identical images.
-  #
-  # Not :sha-<short>, even though that is the more precise name. up.sh deploys
-  # the whole stack under one IMAGE_TAG and devforge-web is built in the other
-  # repo under its own sha, so a sha tag names five of the six images and
-  # nothing for the sixth.
-  #
-  # Staging is its own VPS, not a second stack beside production. On one box the
-  # two share a Docker daemon while keeping separate databases, and
-  # MAX_CONTAINERS counts lab seats from the database it can see
-  # (internal/labs/adapter/repo/session.go) — so each half believes it has room
-  # and together they spawn twice the containers the machine was sized for.
-  # A second box has no such coupling, and no way for a QA session to take CPU
-  # from a class in progress.
-  deploy-staging:
-    if: github.ref == 'refs/heads/master'
-    needs: [images]
-    runs-on: ubuntu-latest
-    concurrency:
-      group: deploy-staging
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v7
-      # Until the box exists this job would fail on every merge, and a workflow
-      # that is always red teaches people to ignore it. Skip quietly instead:
-      # the secret appearing is what turns staging on.
-      - id: gate
-        run: |
-          if [ -z "${{ secrets.STAGING_SSH_HOST }}" ]; then
-            echo "no STAGING_SSH_HOST — staging box not provisioned yet (INFRA.md §13.4), skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
-      - name: ssh and release
-        if: steps.gate.outputs.skip != 'true'
-        env:
-          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
-          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
-        run: |
-          set -euo pipefail
-          # A constant, and still checked before it is interpolated into a
-          # remote shell command — the check is about the habit, not about
-          # this value. Staging tracks master, so the tag it deploys is the
-          # moving one both repos publish.
-          TAG=master
-          install -d -m 700 ~/.ssh
-          echo "${{ secrets.STAGING_SSH_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
-          # Staging tracks the branch, production tracks a tag — that is the only
-          # difference between the two deploys. Force-checkout rather than pull
-          # for the same reason as production: a pull refuses to run wherever a
-          # previous checkout left a detached HEAD.
-          timeout 1800 ssh -o ConnectTimeout=10 -o BatchMode=yes \
-            -i ~/.ssh/id_ed25519 "$SSH_USER@$SSH_HOST" \
-            "set -e
-             cd /opt/devforge/devforge-be
-             git fetch --force origin master
-             git checkout --force -B master origin/master
-             IMAGE_TAG=$TAG ./deploy/up.sh"
-
-  # A tag builds nothing. It renames images that already exist, which is what
-  # makes "the thing that was tested" and "the thing that is deployed" the same
-  # bits rather than two builds of one commit.
-  promote:
-    if: github.ref_type == 'tag'
-    needs: [be, secrets]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: retag sha to version
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          # A tag on a commit that never reached master was never built, never
-          # scanned and never seen on staging. Refuse it here rather than
-          # discovering the missing image halfway through a deploy.
-          git fetch --depth=1 origin master
-          git merge-base --is-ancestor HEAD origin/master \
-            || { echo "tag $TAG is not on master"; exit 1; }
-
-          api=${API_IMAGE,,}
-          labs=${LAB_PREFIX,,}
-          sha_tag="sha-$(git rev-parse --short HEAD)"
-
-          # imagetools copies by digest, server side: no pull, no rebuild, and
-          # the promoted image is bit-identical to the scanned one by
-          # construction rather than by convention.
-          for src in "$api:$sha_tag" "$labs-linux:$sha_tag" "$labs-git:$sha_tag" \
-                     "$labs-docker:$sha_tag" "$labs-net:$sha_tag"; do
-            docker buildx imagetools inspect "$src" >/dev/null \
-              || { echo "no image $src — the tagged commit was never built on master"; exit 1; }
-            docker buildx imagetools create -t "${src%:*}:$TAG" "$src"
+            docker push "$repo:$TAG"
           done
 
   # Deploy runs only on a version tag, after lint/test/gitleaks are green on
-  # that exact tag and after both repos have promoted their images. The step is
+  # that exact tag and after both repos have built and published it. The step is
   # an ssh and nothing else: no registry work, no artifacts. The env file lives
   # on the server at chmod 600 and is not shipped from here.
   deploy:
     if: github.ref_type == 'tag'
-    needs: [promote]
+    needs: [images]
     runs-on: ubuntu-latest
     concurrency:
       group: deploy-prod
       cancel-in-progress: false
     steps:
+      # Checked out for one reason: scripts/release-guard.sh. Nothing else in
+      # this job reads the tree — the box fetches its own copy.
+      - uses: actions/checkout@v7
       - name: wait for the frontend image
         env:
           TAG: ${{ github.ref_name }}
@@ -375,12 +290,13 @@ jobs:
           web=${WEB_IMAGE,,}
           # This is the cross-repo gate. A release is one version number worn by
           # both repos, and `needs:` cannot span repositories — but the registry
-          # can: devforge-fe promotes its own image under the same tag, and if
+          # can: devforge-fe builds and pushes its own image under the same tag, and
           # that has not happened this deploy has no frontend to ship and stops
           # before touching the box.
           #
           # A wait rather than a straight check because the two repos are tagged
-          # seconds apart and their workflows do not start in a fixed order.
+          # seconds apart, their workflows do not start in a fixed order, and
+          # each now has a full image build to get through first.
           for i in $(seq 1 30); do
             if docker manifest inspect "$web:$TAG" >/dev/null 2>&1; then
               echo "found $web:$TAG"; exit 0
@@ -410,13 +326,10 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          # The tag name is interpolated into a remote shell command, so it is
-          # checked before it gets there. The `v*` filter above is not a filter
-          # on shell metacharacters.
-          case "$TAG" in
-            v[0-9]*) [ -z "${TAG//[A-Za-z0-9._-]/}" ] || { echo "refusing tag: $TAG"; exit 1; } ;;
-            *) echo "refusing tag: $TAG"; exit 1 ;;
-          esac
+          # The tag reaches a remote shell below, so it is checked before it
+          # gets there. Same script the images job runs, so the two cannot
+          # disagree about what a release name is allowed to look like.
+          ./scripts/release-guard.sh "$TAG"
           install -d -m 700 ~/.ssh
           echo "${{ secrets.SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519

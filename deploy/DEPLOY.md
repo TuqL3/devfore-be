@@ -193,34 +193,33 @@ xoá đúng hai thứ không có bản sao ở đâu.
 
 ## 4. Deploy tay lần đầu
 
-⚠️ **Phải là tag phiên bản `vX.Y.Z`, không phải `sha-<short>`.** `up.sh` kéo
-`api`, `web` và 4 image lab bằng **cùng một** `IMAGE_TAG`. `api` và 4 image lab
-build ở repo be nên mang sha của be; `web` build ở repo fe nên mang sha của fe —
-hai con số khác nhau:
+⚠️ **Tag phiên bản `vX.Y.Z` là cái tên duy nhất tồn tại.** `up.sh` kéo `api`,
+`web` và 4 image lab bằng **cùng một** `IMAGE_TAG`. `api` và 4 image lab build ở
+repo be; `web` build ở repo fe. Sha của hai repo không bằng nhau, nên chỉ một
+cái tên do cả hai cùng đặt mới gọi được cả sáu image — và đó là tag phiên bản.
 
-```
-be  master  →  devforge-api:sha-226ed8d  +  4 × devforge-lab-*:sha-226ed8d
-fe  master  →  devforge-web:sha-33c8d37
-```
-
-`IMAGE_TAG=sha-<của be>` kéo được api và 4 lab rồi chết ở `devforge-web` không
-tồn tại. Tag phiên bản là **thứ duy nhất cả hai repo cùng promote**, và đó đúng
-là lý do nó tồn tại.
-
-Nên trước bước này phải cắt một tag:
+**Nhánh không build gì cả.** Push vào `develop` hay `master` chỉ chạy phần kiểm:
+lint, test, coverage, gitleaks, trivy fs, sonar. Không có image nào được tạo,
+không có gì chạm vào registry. Cắt tag là hành động duy nhất dựng ra artifact.
 
 ```bash
 make release v=v0.1.0        # gắn tag CẢ HAI repo rồi push
 ```
 
-Đợi `promote` xanh ở cả hai repo — nó tạo `:v0.1.0` từ `:sha-<short>` có sẵn.
-Job `deploy` cũng chạy theo tag, nhưng **tự bỏ qua khi chưa có secret
-`SSH_HOST`**, nên lúc này nó không làm gì và master vẫn xanh. Đó là điều kiện để
-bạn tự tay làm lần deploy đầu thay vì giao nó cho một job.
+Tag chạy: `release-guard` kiểm tên → tag phải nằm trên master → build 6 image →
+Trivy quét từng cái → push `:v0.1.0`. Đợi xanh ở **cả hai** repo.
 
-⚠️ Bẫy của tag đầu tiên: `promote` đòi image `:sha-<short>` của commit được tag
-phải có sẵn trên GHCR, mà image chỉ build khi push **master**. Tag một commit cũ
-hơn job `images` thì `promote` dừng và nói thẳng lý do.
+Job `deploy` cũng chạy theo tag, nhưng **tự bỏ qua khi chưa có secret
+`SSH_HOST`**, nên lúc này nó không làm gì. Đó là điều kiện để bạn tự tay làm lần
+deploy đầu thay vì giao nó cho một job.
+
+⚠️ **Tag đầu tiên là lần đầu đường build chạy thật.** Không nhánh nào build, nên
+không có bản chạy trước để so. Cắt thử `v0.0.1-rc1` trước tag thật: nó đi hết
+build, quét, push, rồi dừng ở `deploy` vì thiếu `SSH_HOST` — biết được đường
+build có xanh không mà không chạm vào máy nào.
+
+⚠️ Tag phải nằm trên `master`. `images` kiểm bằng `git merge-base --is-ancestor`
+**trước khi** build, nên tag cắt từ nhánh phụ bị từ chối ngay, không tốn build.
 
 Rồi trên máy:
 
@@ -340,8 +339,8 @@ Rồi cắt tag tiếp theo và xem nó chạy hết đường:
 make release v=v0.1.1
 ```
 
-`images` → `promote` → `deploy` (chờ `devforge-web:v0.1.1` xuất hiện) → ssh →
-`up.sh`. Job `deploy` có `timeout 1800`, `ConnectTimeout=10`, `BatchMode=yes`,
+`be`/`secrets` → `images` (guard → build → Trivy → push) → `deploy` (chờ
+`devforge-web:v0.1.1` xuất hiện) → ssh → `up.sh`. Job `deploy` có `timeout 1800`, `ConnectTimeout=10`, `BatchMode=yes`,
 nên một máy treo không giữ runner sáu tiếng.
 
 Lần này bạn đang xem CD làm đúng việc bạn vừa làm tay ở §4. So được hai bên là
@@ -387,15 +386,23 @@ DNS `staging.<domain>` A → IP máy staging, **cũng mây cam**.
 
 Google Console: URI thứ hai. Thiếu nó thì OAuth chết đúng ở staging.
 
-Ba secret `STAGING_SSH_HOST`, `STAGING_SSH_USER`, `STAGING_SSH_KEY` → job
-`deploy-staging` **tự bật**. Trước khi có chúng nó tự bỏ qua, nên master vẫn
-xanh trong lúc chưa mua máy.
+**Không có deploy tự động cho staging.** Job `deploy-staging` đã bị bỏ cùng lúc
+với việc nhánh thôi build: nó deploy tag trôi `:master`, mà giờ không ai đẩy tag
+đó nữa. Ba secret `STAGING_SSH_*` không còn được dùng.
 
-Staging deploy bằng tag trôi **`:master`**, không phải `:sha-<short>` — cả hai
-repo đẩy tag đó cho bản master mới nhất của mình, và nó là thứ duy nhất gọi tên
-được cả sáu image cùng lúc (§4 giải thích vì sao sha không làm được). Hệ quả:
-`.image-tag` trên staging ghi `master`, nên **staging không có đích rollback**.
-Đúng chủ ý — staging là máy dựng lại được, prod mới là máy cần lùi bản.
+Diễn tập một bản phát hành bằng đúng câu lệnh production dùng, với đúng cái tag
+production sắp dùng:
+
+```bash
+ssh <user>@<ip staging>
+cd /opt/devforge/devforge-be
+git fetch --tags --force && git checkout --force --detach v0.1.0
+IMAGE_TAG=v0.1.0 ./deploy/up.sh
+```
+
+Đổi lại được một thứ bản cũ không có: staging và prod chạy **đúng một cái tên
+image**, nên "đã diễn tập ở staging" là câu đúng về bit. Và `.image-tag` trên
+staging trỏ vào một đích lùi được, thay vì ghi `master`.
 
 ---
 

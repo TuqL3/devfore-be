@@ -23,7 +23,7 @@ Runbook thao tác trên máy nằm ở [deploy/DEPLOY.md](deploy/DEPLOY.md).
 
 Image **build một lần ở GitHub Actions rồi đẩy lên GHCR**, máy prod chỉ `pull`. Cả hai đều amd64 nên không có QEMU ở giữa (§9.2). Hệ quả nằm ở rollback, xem ngay dưới bảng.
 
-> **FE cũng là một image, và cũng promote được.** Vite bake `VITE_API_URL` lúc build, nên bất kỳ giá trị nào khác rỗng đều làm image dính chặt vào một môi trường: bản build cho staging không bao giờ là bản lên production. Cách thoát nằm ở chỗ **không bake gì cả**.
+> **FE cũng là một image, và cũng dùng chung được cho mọi môi trường.** Vite bake `VITE_API_URL` lúc build, nên bất kỳ giá trị nào khác rỗng đều làm image dính chặt vào một môi trường: bản build cho staging không bao giờ là bản lên production. Cách thoát nằm ở chỗ **không bake gì cả**.
 >
 > `devforge-fe/Dockerfile` ghim `ENV VITE_API_URL=""` — không phải `ARG`, nên không có gì để quên truyền. Bundle gọi đường dẫn tương đối, và biên đã route `/api`, `/ws`, `/uploads` sang API trên **cùng origin** (`deploy/nginx/devforge.conf`). Một image chạy được mọi môi trường; xem §9.1.1 vì sao phương án Cloudflare Pages bị đảo lại.
 >
@@ -39,26 +39,24 @@ Image **build một lần ở GitHub Actions rồi đẩy lên GHCR**, máy prod
 | TLS       | không                          | nginx + Cloudflare Origin Certificate (§9.5)                            |
 | FE        | `vite dev` trên host           | image `devforge-web`, cùng box cùng origin (§9.1.1)                     |
 | Log       | stdout                         | stdout → `docker compose logs` (chưa có gom log, §1)                    |
-| Deploy    | hot reload (`air`, `vite dev`) | Actions → GHCR → promote theo tag → SSH → `up.sh` (pull + `up -d --wait`) |
+| Deploy    | hot reload (`air`, `vite dev`) | tag `v*` → Actions build + quét → GHCR → SSH → `up.sh` (pull + `up -d --wait`) |
 
-⚠️ **`sha-<short>` của hai repo KHÔNG bằng nhau, nên một sha không gọi tên được
-một stack.** `deploy/up.sh` kéo `api`, `web` và 4 image lab bằng **cùng một**
-`IMAGE_TAG`; `api` và 4 lab mang sha của be, `web` mang sha của fe. Nghĩa là
-`IMAGE_TAG=sha-<của be>` kéo được 5 image rồi chết ở `devforge-web:sha-<của be>`
-— một tag không tồn tại và sẽ không bao giờ tồn tại.
+⚠️ **Một stack chỉ gọi tên được bằng một cái tên cả hai repo cùng đặt.**
+`deploy/up.sh` kéo `api`, `web` và 4 image lab bằng **cùng một** `IMAGE_TAG`;
+`api` và 4 lab đến từ repo be, `web` đến từ repo fe. Sha của hai repo không bằng
+nhau, nên `IMAGE_TAG=sha-<của be>` kéo được 5 image rồi chết ở
+`devforge-web:sha-<của be>` — một tag không tồn tại và sẽ không bao giờ tồn tại.
+Đó là lý do tag phiên bản là tên duy nhất được dùng, và là lý do không còn tên
+nào khác được đẩy lên registry:
 
-Hệ quả có hai nửa, và cả hai đều từng sai trên đĩa:
-
-- **Prod phải là tag `vX.Y.Z`** — thứ duy nhất cả hai repo cùng promote. Đó là
-  lý do tag phiên bản tồn tại, chứ không phải để cho đẹp. `deploy/DEPLOY.md` §4
-  từng bảo dùng một tag bất kỳ; đã sửa.
-- **Staging dùng tag trôi `:master`.** Job `deploy-staging` từng truyền
-  `IMAGE_TAG=sha-$(git rev-parse --short HEAD)` của chính repo be, nên nó sẽ
-  chết đúng ở `devforge-web` **ngay lần đầu được bật** — tức là ngay sau khi
-  thêm ba secret `STAGING_SSH_*`, lúc không ai nghi ngờ gì. Giờ cả hai repo đẩy
-  thêm `:master` cho bản master mới nhất và staging deploy tag đó. Cái giá:
-  `.image-tag` trên staging ghi `master`, nên staging không có đích rollback —
-  chấp nhận được, staging là máy dùng xong bỏ.
+- **Tag `vX.Y.Z` là tên duy nhất gọi được một stack** — thứ duy nhất cả hai repo
+  cùng đặt lên image của mình. Đó là lý do tag phiên bản tồn tại, chứ không phải
+  để cho đẹp. `deploy/DEPLOY.md` §4 từng bảo dùng một tag bất kỳ; đã sửa.
+- **Không còn tag `sha-<short>` và không còn tag trôi `:master`.** Chỉ tag mới
+  build, nên registry chỉ chứa đúng những cái tên có thể deploy được. Cái tag
+  trôi từng tồn tại để staging có thứ gì đó gọi tên cả stack; giờ không job nào
+  deploy staging nữa, nên nó không còn việc gì để làm. Bỏ nó cũng bỏ luôn cái
+  bẫy kèm theo: `.image-tag` ghi `master` thì không có đích để lùi về.
 
 **Rollback = đổi tag, không phải build lại.** `deploy/up.sh` ghi tag đang chạy vào `.image-tag` sau mỗi lần khoẻ, và lấy chính nó làm đích lùi: `IMAGE_TAG=<tag-cũ> docker compose up -d --wait` — vài giây, vì image cũ đã nằm sẵn ở GHCR và trong cache của box. Đây là lãi trực tiếp của việc rời ARM (§9.2); bản Oracle cũ phải build lại 1–2 phút trong lúc bản lỗi vẫn đang phục vụ.
 
@@ -190,17 +188,44 @@ Deploy 3:  DROP COLUMN user_name; code chỉ dùng username
 
 ### CI/CD — hai repo, gặp nhau ở registry
 
-**Một nhánh dài, không có `develop`.** `develop` tồn tại để che master, mà master
-ở đây đã được che bằng thứ khác: merge vào master không deploy production, chỉ tag
-mới deploy. Giữ thêm một nhánh dài thì rước đúng một cái bẫy — merge
-`develop → master` đẻ merge commit, SHA đổi, và image mang SHA cũ không còn khớp
-commit được tag. Phải ép `--ff-only` vĩnh viễn để chống một vấn đề tự mình tạo ra.
+**Hai nhánh dài: `develop` tích hợp, `master` production.**
+
+Trước đây chỗ này chỉ có master, với lập luận: thêm `develop` là rước một cái
+bẫy — merge `develop → master` đẻ merge commit, SHA đổi, image mang SHA cũ
+không còn khớp commit được tag, nên phải ép `--ff-only` vĩnh viễn để chống một
+vấn đề tự mình tạo ra.
+
+Lập luận đó chỉ đúng nếu có thứ gì đó build theo nhánh. Không còn nữa. **Chỉ
+tag mới build**, nên không nhánh nào sinh ra image, và không có SHA nào để
+lệch. `--ff-only` là thứ không cần tới.
 
 ```
 pull_request                → chỉ kiểm, không build gì
-push master                 → kiểm → build → quét → push :sha-<short> + :master → deploy STAGING
-push tag v* (CẢ HAI repo)   → promote :sha-<short> → :v1.2.0          → deploy PROD
+push develop                → chỉ kiểm, không build gì
+push master                 → chỉ kiểm, không build gì
+push tag v* (CẢ HAI repo)   → kiểm → build → quét → push :v1.2.0 → deploy PROD
 ```
+
+Ba dòng đầu giống hệt nhau, và đó là chủ ý: một nhánh không phải là một bản
+phát hành. Không gì chạm vào registry hay vào máy cho tới khi có người đặt tên
+một phiên bản.
+
+Cái giá là thật và phải nói ra: image lên production **chưa từng chạy ở đâu
+trước đó**. Base image ghi theo dòng minor (`golang:1.26-alpine`,
+`nginx:1.31-alpine`) nên một bản build lúc tag có thể kéo lớp nền mà chưa gì
+test qua. Trivy vẫn chặn trước khi push, nên nó hiện ra thành **bản phát hành
+đỏ, không phải bản đã ship**. Đó là hướng hỏng chấp nhận được, không phải là
+hỏng không tồn tại.
+
+Tag chỉ cắt trên master, và không dựa vào trí nhớ ai cả: job `images` chạy
+`git merge-base --is-ancestor HEAD origin/master` trước khi build, nên tag cắt
+từ nhánh phụ bị từ chối ngay cả khi commit đó xanh.
+
+Tên tag đi vào tên docker image và, ở job `deploy`, đi vào một câu lệnh chạy
+qua ssh trên máy production. Bộ lọc `tags: ["v*"]` lọc tên chứ không lọc ký tự
+shell — `v1;rm -rf /` khớp `v*` rất vừa. Nên có `scripts/release-guard.sh`, gọi
+ở cả hai job để hai chỗ không thể bất đồng về việc một cái tên phát hành được
+phép trông như thế nào, và `make check-release-guard` giữ nó trung thực.
 
 Repo `devforge-be`:
 
@@ -210,23 +235,17 @@ job be      → gofmt -l | (! grep .)  →  golangci-lint  →  go build
 job secrets → gitleaks (fetch-depth: 0, cần quyền pull-requests: read)
               →  trivy fs: go.sum
 
-chỉ khi push master và cả hai xanh:
-  job images         → docker build --target prod --load   ← --load, CHƯA push
-                       →  trivy image devforge-api
-                       →  build 4 lab image  →  trivy image từng cái
-                       →  quét xong mới push :sha-<short> VÀ :master
-                          ← đỏ thì registry không có gì
-                          ← :master vì up.sh deploy cả stack bằng MỘT tag, mà
-                            sha của be không phải sha của fe
-  job deploy-staging → chưa có secret STAGING_SSH_HOST → bỏ qua, master vẫn xanh
-                       →  ssh máy staging: checkout --force -B master origin/master
-                          IMAGE_TAG=master ./deploy/up.sh
-
 chỉ khi push tag `v*` và cả hai xanh:
-  job promote → git merge-base --is-ancestor HEAD origin/master  ← tag phải trên master
-                →  imagetools inspect :sha-<short>  thiếu → dừng, commit chưa từng build
-                →  imagetools create :v1.2.0 từ :sha-<short>  ← copy theo digest, không build lại
-  job deploy  → chờ tối đa 5' cho ghcr devforge-web:v1.2.0 xuất hiện
+  job images  → release-guard.sh <tag>      ← tên tag: lọc trước khi build, không phải sau
+                →  merge-base --is-ancestor HEAD origin/master  ← tag phải trên master
+                →  docker build --target prod --load   ← --load, CHƯA push
+                →  trivy image devforge-api
+                →  build 4 lab image  →  trivy image từng cái
+                →  quét xong mới push :v1.2.0
+                   ← đỏ thì registry không có gì
+                   ← một cái tên duy nhất, và nó lùi về được
+  job deploy  → release-guard.sh <tag>      ← cùng script, hai chỗ không thể lệch nhau
+                →  chờ tối đa 5' cho ghcr devforge-web:v1.2.0 xuất hiện
                      thiếu → dừng, CHƯA chạm vào box      ← cổng xuyên repo
                 →  ssh: git fetch --tags --force
                         git checkout --force --detach <tag>   (chỉ clone be)
@@ -246,9 +265,10 @@ Repo `devforge-fe`, cùng hình dạng, không có job deploy:
 job fe      → oxlint  →  tsc --noEmit  →  npm run check (8 file assert)  →  build
 job secrets → gitleaks  →  trivy fs (package-lock.json)
 
-push master → job image   → build --load → trivy image → push devforge-web:sha-<short>
-push tag v* → job promote → tag phải trên master
-                          →  imagetools create devforge-web:v1.2.0 từ :sha-<short>
+push develop / master → chỉ job fe + secrets + sonar, không build gì
+push tag v*           → job image → tag phải trên master
+                                  →  build --load → trivy image
+                                  →  push devforge-web:v1.2.0
 ```
 
 ⚠️ **Image lab được pull rồi `docker tag` về `devforge/<tên>:latest` ngay trên máy.**
@@ -261,16 +281,18 @@ thì, và giữ được nguyên tắc *quét cái gì thì ship cái đó*.
 1. **`/readyz` phải trả đỏ khi API chưa nối được DB** — nếu không thì bước kiểm luôn xanh và rollback không bao giờ bắn. Đã có: `cmd/server/router.go:74` ping database timeout 2 giây, trả `503` khi hỏng. `/healthz` luôn `200`, chỉ nói tiến trình còn sống — **đừng dùng nó làm điều kiện rollback.**
 2. **Migration chạy trước `up -d`, và phải tương thích ngược.** Rollback chỉ lùi image, không lùi schema.
 3. **Rollback không chạy lại `migrate`.** Bản deploy hỏng có thể đã apply xong một migration; `migrate up` với `migrations/` cũ sẽ chết vì version đã apply không còn file — và chết *trước* khi kịp đưa image cũ trở lại.
-4. **Secret**: `SSH_HOST`/`SSH_USER`/`SSH_KEY` (prod) + `STAGING_SSH_*` (staging), chỉ ở repo be. Repo fe không cần secret nào — `GITHUB_TOKEN` mặc định đủ `packages: write` cho GHCR cùng owner.
+4. **Secret**: `SSH_HOST`/`SSH_USER`/`SSH_KEY` (prod), chỉ ở repo be. `STAGING_SSH_*` không còn được dùng — job `deploy-staging` đã bị bỏ cùng lúc với việc master thôi build (§8). Repo fe không cần secret nào — `GITHUB_TOKEN` mặc định đủ `packages: write` cho GHCR cùng owner.
 
 **Chỉ một đường vào box, và nó nằm ở repo be.** `concurrency` của GitHub Actions
 tính theo từng repo nên không xếp hàng hai repo với nhau được; job deploy thứ hai
 là một đường đua, dù có cổng tag hay không.
 
-Việc của repo fe trong một bản phát hành đúng một thứ: promote image của chính nó
-lên `:v1.2.0`. Job `deploy` bên be **chờ** image đó, tối đa 5 phút, rồi mới ssh.
-`needs:` không bắc qua hai repo được, nhưng registry thì bắc được — fe chưa promote
-thì image không tồn tại và deploy dừng trước khi chạm vào box.
+Việc của repo fe trong một bản phát hành đúng một thứ: build và đẩy image của
+chính nó lên `:v1.2.0`. Job `deploy` bên be **chờ** image đó, tối đa 5 phút, rồi
+mới ssh. `needs:` không bắc qua hai repo được, nhưng registry thì bắc được — fe
+chưa đẩy thì image không tồn tại và deploy dừng trước khi chạm vào box. Năm phút
+là con số cũ, từ thời fe chỉ phải copy một digest; giờ fe phải build thật, nên
+nếu bản phát hành nào chạm trần thì chỗ cần nâng là đây.
 
 ⚠️ **`flock` vẫn cần, và đặt trên thư mục checkout chứ không phải file khoá.**
 `concurrency` không biết gì về **người** đang ssh vào box, mà §13.4 bảo chạy
@@ -282,7 +304,7 @@ do người deploy đầu tiên tạo, một lần `sudo ./deploy/up.sh` để l
 ra bản mới khi có người gắn tag (`make release v=v1.2.0`). Hệ quả:
 
 - `master` là nhánh *deploy được*, không phải nhánh *đã deploy*. Cái đang chạy trên prod là tag gần nhất, không phải HEAD của `master`.
-- `promote` đòi `merge-base --is-ancestor`, nên tag cắt từ nhánh phụ bị từ chối kể cả khi commit đó xanh.
+- `images` đòi `merge-base --is-ancestor` trước khi build, nên tag cắt từ nhánh phụ bị từ chối kể cả khi commit đó xanh — và bị từ chối *trước* khi tốn mười phút build.
 - Chỉ còn **một** clone trên mỗi box: repo fe là image, không được clone ở đó nữa. Bẫy detached-HEAD của lỗi 13.0#3 biến mất theo — rollback đổi `IMAGE_TAG`, không `git checkout`.
 - Sau rollback, clone be vẫn nằm ở tag hỏng. Không sao — lần sau `checkout --force` chứ không `pull`. Nhưng file nginx và `migrations/` trên đĩa là bản mới trong khi image là bản cũ, nên cả hai bắt buộc tương thích ngược.
 
@@ -312,7 +334,7 @@ một lần trong UI**, nếu không box phải `docker login ghcr.io` bằng PA
 
 Bốn thứ, và thứ tự giữa chúng không đổi được.
 
-**1. Artifact phải có trước — ✅ đã có.** Trước đây image build **trên box**, nên trong CI không tồn tại image nào để quét, và rollback build lại từ source tức là **khác bit** với thứ vừa test xanh. Cả hai đã đóng: sáu image (`devforge-api`, `devforge-web`, bốn `devforge-lab-*`) build một lần trong Actions, quét ở đó, đẩy lên GHCR dưới `:sha-<short>`, và tag `v*` chỉ **đổi tên** chúng bằng `imagetools create` — copy theo digest, không build lại.
+**1. Artifact phải có trước — ✅ đã có.** Trước đây image build **trên box**, nên trong CI không tồn tại image nào để quét, và rollback build lại từ source tức là **khác bit** với thứ vừa test xanh. Cả hai đã đóng: sáu image (`devforge-api`, `devforge-web`, bốn `devforge-lab-*`) build một lần trong Actions, quét ở đó, đẩy lên GHCR dưới `:vX.Y.Z` — một cái tên, bất biến, và là đích để lùi về. Rollback kéo lại đúng digest đó chứ không build lại từ source.
 
 Không `:latest` trên prod. `latest` là thứ làm rollback hết tái lập được, và `docker-compose.prod.yml` đòi `IMAGE_TAG` bằng `${IMAGE_TAG:?}` chứ không đặt mặc định, đúng vì một mặc định là cách `latest` lên máy mà không ai chọn.
 
@@ -337,7 +359,7 @@ Quét `fs` bắt `go.sum` và `package-lock.json` — lỗ hổng ở dependency
 
 **4. SonarQube — không tự dựng, không bàn thêm.** Nó là app JVM cần Postgres riêng, sàn 2–4 GB. Box là KVM2 2 vCPU và §9.4 đã chốt **CPU là trần**: ghế lab chính là sản phẩm. Dựng Sonar ở đó là lấy ghế học viên nuôi một cái dashboard.
 
-**SonarQube Cloud** (SaaS, 0₫ cho repo public) là đường duy nhất còn lại. **Job `sonar` đã có ở cả hai repo** (`SonarSource/sonarqube-scan-action@v8.2.2` + `sonar-project.properties`), và nó **tự bỏ qua khi chưa có `SONAR_TOKEN`** — cùng cách `deploy`/`deploy-staging` bỏ qua khi chưa có secret SSH. Còn lại đúng một việc tay: tạo tài khoản, bind repo, dán token.
+**SonarQube Cloud** (SaaS, 0₫ cho repo public) là đường duy nhất còn lại. **Job `sonar` đã có ở cả hai repo** (`SonarSource/sonarqube-scan-action@v8.2.2` + `sonar-project.properties`), và nó **tự bỏ qua khi chưa có `SONAR_TOKEN`** — cùng cách job `deploy` bỏ qua khi chưa có secret SSH. Còn lại đúng một việc tay: tạo tài khoản, bind repo, dán token.
 
 Cổng là thật chứ không phải báo cáo: `sonar.qualitygate.wait=true` trong `sonar-project.properties` làm job đỏ khi Quality Gate trượt. Không có dòng đó thì phân tích vẫn upload, dashboard vẫn đỏ, mà CI vẫn xanh.
 
@@ -390,17 +412,17 @@ sẽ lệch, và nó luôn là staging. Các dòng phải đổi nằm ở cuố
 | `LAB_SESSION_TTL` | `20m` | `10m` |
 | `OPENROUTER_API_KEY` | (rỗng, xem §9.6) | rỗng — đừng đốt tiền AI ở staging |
 | Email | Resend / Brevo | Mailpit, `COMPOSE_PROFILES=dev` |
-| Trigger deploy | push tag `v*` | push `master` |
-| Image | `:v1.2.0` | `:master` — **cùng bit**, khác tên |
+| Trigger deploy | push tag `v*` | bằng tay: `IMAGE_TAG=v1.2.0 ./deploy/up.sh` |
+| Image | `:v1.2.0` | `:v1.2.0` — **cùng bit, cùng tên** |
 
-Dòng cuối là điểm quan trọng nhất: cả ba tên — `:sha-<short>`, `:master`,
-`:v1.2.0` — trỏ vào **cùng một digest**. `promote` dùng `imagetools create`,
-copy theo digest chứ không build lại. "Đã test ở staging" vì thế là câu đúng về
-bit, không phải về commit.
+⚠️ **Staging không còn deploy tự động.** Job `deploy-staging` đã bị bỏ cùng lúc
+với việc nhánh thôi build: nó deploy tag trôi `:master`, mà giờ không ai đẩy tag
+đó nữa. Muốn diễn tập một bản phát hành thì ssh vào máy staging và chạy đúng câu
+lệnh production chạy, với cùng cái tag.
 
-Staging deploy bằng `:master` chứ không bằng `:sha-<short>` vì `up.sh` deploy cả
-sáu image dưới **một** `IMAGE_TAG`, mà sha của repo be không phải sha của repo
-fe — chi tiết ở §8 đầu mục.
+Đổi lại được một thứ mà bản cũ không có: staging và production chạy **đúng một
+cái tên image**, nên "đã test ở staging" là câu đúng về bit chứ không chỉ về
+commit, và `.image-tag` trên staging trỏ vào một đích lùi được.
 
 ⚠️ **Mailpit chỉ nghe `127.0.0.1`** (`docker-compose.yml`), vào hộp thư qua tunnel:
 
@@ -436,7 +458,7 @@ có; dựng nó trước là diễn tập cho thứ chưa viết.
    │ VPS prod — 2 vCPU / 8 GB, SG       │    │ VPS staging — nhỏ    │
    │                                    │    │ cùng compose,        │
    │  nginx  real_ip CF-Connecting-IP   │    │ khác .env            │
-   │    │    /ws/: buffering off        │    │ image :sha-<short>   │
+   │    │    /ws/: buffering off        │    │ image :vX.Y.Z        │
    │    ├──► web  (SPA tĩnh)            │    │ không backup         │
    │    └──► api  (Go, distroless)      │    │ mailpit ở 127.0.0.1  │
    │           ├── postgres  loopback   │    └──────────────────────┘
@@ -459,12 +481,13 @@ có; dựng nó trước là diễn tập cho thứ chưa viết.
 Luồng deploy:
 
 ```
-push master → CI lint·test·coverage·gitleaks·trivy
-            → build 6 image → quét → ghcr :sha-<short>
-            → ssh staging → up.sh → pull, migrate, up -d --wait
+push develop  → CI lint·test·coverage·gitleaks·trivy fs·sonar
+push master   → giống hệt trên. Không build, không chạm registry
 
-tag v*      → promote :sha-<short> → :v1.2.0   (đổi tên, không build lại)
-            → chờ image fe cùng tag → ssh prod → up.sh
+tag v*        → CI như trên, rồi:
+              → release-guard + tag phải trên master
+              → build 6 image → quét → ghcr :v1.2.0
+              → chờ image fe cùng tag → ssh prod → up.sh
             → không healthy trong 120s → IMAGE_TAG=$(cat .image-tag) up -d --wait
 ```
 
@@ -473,7 +496,7 @@ cả ba đều là ràng buộc của chính sản phẩm chứ không phải s�
 
 1. **`docker-socket-proxy` + lab container.** App tự đẻ container — đó là sản phẩm. Kéo theo trần số container, reaper, và lý do không PaaS nào dùng được.
 2. **Không có worker/queue.** Reaper là một goroutine, email gửi đồng bộ. Thêm BullMQ hay một service worker lúc này là thêm tiến trình phải giám sát cho việc chưa tồn tại.
-3. **FE nằm cùng box, cùng origin.** Đây là lựa chọn, không phải mặc định: nó tốn gần như không CPU (phát file tĩnh, không build) và đổi lại là một image FE promote được từ staging lên prod — xem §9.1.1.
+3. **FE nằm cùng box, cùng origin.** Đây là lựa chọn, không phải mặc định: nó tốn gần như không CPU (phát file tĩnh, không build) và đổi lại là một image FE dùng chung được cho staging và prod — xem §9.1.1.
 
 ### 9.1 Máy chủ: Hostinger VPS
 
@@ -517,8 +540,8 @@ hai. Snapshot để khôi phục nhanh, R2 để sống sót.
 > không ai đề xuất lại: lý do là **artifact**.
 
 Vite bake `VITE_API_URL` lúc build. Tách hai origin thì giá trị bake vào staging
-khác giá trị bake vào production — hai bản build cho một commit, và "build một
-lần, promote nhiều lần" ở nửa FE thành cái nhãn dán. Diễn tập ở staging xong thì
+khác giá trị bake vào production — hai bản build cho một commit, và một image
+FE dùng được ở cả hai nơi thành cái nhãn dán. Diễn tập ở staging xong thì
 thứ lên prod vẫn là bit chưa ai chạy.
 
 Cách thoát: **không bake gì cả.** `Dockerfile` ghim `ENV VITE_API_URL=""`, bundle
@@ -782,7 +805,7 @@ Tường lửa của nhà cung cấp (Hostinger hPanel, Oracle VCN, DO Cloud Fir
 
 Sơ đồ tự dựng hay có nginx ở biên (TLS + routing) **và** một nginx nữa bên trong làm "proxy cho frontend/backend". Hai tầng proxy trên cùng một máy không thêm gì ngoài một hop, một file config nữa phải đồng bộ, và một chỗ nữa để `X-Forwarded-For` bị đứt.
 
-Ở đây **có hai tiến trình phục vụ HTTP, nhưng chỉ một cái proxy**: biên làm TLS và routing, còn image `devforge-web` chỉ `file_server` cho `dist` trên loopback nội bộ — nó không proxy đi đâu và không đọc `X-Forwarded-For`. Cái giá là một hop loopback; cái được là FE ship dưới dạng một artifact tự chứa, promote được như image api. Đừng biến `devforge-web` thành proxy — lúc đó nó mới thành cái bẫy ở trên.
+Ở đây **có hai tiến trình phục vụ HTTP, nhưng chỉ một cái proxy**: biên làm TLS và routing, còn image `devforge-web` chỉ `file_server` cho `dist` trên loopback nội bộ — nó không proxy đi đâu và không đọc `X-Forwarded-For`. Cái giá là một hop loopback; cái được là FE ship dưới dạng một artifact tự chứa, deploy được ở mọi môi trường như image api. Đừng biến `devforge-web` thành proxy — lúc đó nó mới thành cái bẫy ở trên.
 
 ---
 
@@ -824,7 +847,7 @@ Giữ lại đây một dòng mỗi lỗi vì lý do vẫn còn giá trị; chi 
 | ☐ | Google Console: đăng ký **hai** redirect URI — `https://<domain>/api/auth/google/callback` và `https://staging.<domain>/...` | Khớp từng ký tự. Thiếu cái thứ hai thì OAuth chết đúng ở staging |
 | ☐ | Tạo bucket **R2** + lifecycle xoá sau 30 ngày | Nếu chưa có |
 | ☐ | Secrets repo **be**: `SSH_HOST`, `SSH_USER`, `SSH_KEY` (prod) | Khoá deploy riêng, không dùng lại khoá cá nhân |
-| ☐ | Secrets repo **be**: `STAGING_SSH_HOST`, `STAGING_SSH_USER`, `STAGING_SSH_KEY` | Job `deploy-staging` **tự bỏ qua** khi chưa có `STAGING_SSH_HOST`, nên master vẫn xanh trước lúc mua máy |
+| ~~☐~~ | ~~Secrets repo **be**: `STAGING_SSH_*`~~ | Không còn dùng. Job `deploy-staging` đã bị bỏ — staging deploy bằng tay, cùng tag với production |
 | ☐ | Repo **fe**: không cần secret nào | `GITHUB_TOKEN` mặc định đủ quyền `packages: write` cho GHCR cùng owner |
 | ☐ | **Uptime monitor ngoài** ping `https://<domain>/readyz`, báo Telegram | 5 phút, và là thứ duy nhất báo được "máy chết" (§9.9). Đừng cài trên chính VPS. Không cần monitor cho staging |
 | ☐ | Kiểm cache rule Cloudflare **không phủ `/api/*`, `/ws/*`, `/uploads/*`** | Cùng origin nên cache rule phải theo path chứ không theo host. Cache `/api/*` là phát dữ liệu người này cho người kia (§9.5) |
@@ -842,7 +865,7 @@ Giữ lại đây một dòng mỗi lỗi vì lý do vẫn còn giá trị; chi 
 | ✅ | `deploy/up.sh` | Viết lại: `pull` thay `build`, `up -d --wait --wait-timeout 120` thay hàm `healthy()` tự viết, rollback đổi sang `IMAGE_TAG=$(cat .image-tag)` và **không chạy lại migrate** (lỗi 13.0#4). Đòi `IMAGE_TAG`. Pull 4 lab image rồi `docker tag` về `devforge/<tên>:latest` cho khớp bảng `lab_images`. Lần deploy đầu chưa có `.image-tag` → nói thẳng là không có gì để lùi thay vì lùi bừa |
 | ✅ | `deploy/bootstrap.sh` | Docker: **kiểm rồi thoát**, không cài — hai bản cài trên một máy là chỗ `docker ps` và compose bất đồng ý ai giữ container. Bỏ clone fe; ghi chú tường lửa hPanel; swap 2 GB; lời nhắn cuối nói cert Origin thay vì ACME |
 | ✅ | `.env.prod.example` | `IMAGE_REPO` có; `PUBLIC_URL`/`FRONTEND_URL`/`CORS_ORIGINS`/`GOOGLE_REDIRECT_URL` đã khớp bảng §8; `ACME_EMAIL` đã bỏ; `MAX_CONTAINERS=12`; `LAB_SESSION_TTL=20m` |
-| ✅ | `.github/workflows/ci.yml` | Job `images` (master: build → quét → push `:sha-<short>`), job `promote` (tag: `imagetools create` sang `:v1.2.0`, đòi tag nằm trên master), job `deploy` (chờ `devforge-web:<tag>` rồi ssh, truyền `IMAGE_TAG`). Chỉ checkout clone be — repo fe không còn trên box |
+| ✅ | `.github/workflows/ci.yml` | Job `images` (**chỉ tag `v*`**: release-guard → tag phải trên master → build → quét → push `:v1.2.0`), job `deploy` (chờ `devforge-web:<tag>` rồi ssh, truyền `IMAGE_TAG`). Nhánh không build gì. Chỉ checkout clone be — repo fe không còn trên box |
 | ✅ | `.github/workflows/ci.yml` | `trivy image` chạy trên image `--load` **trước** bước push, cộng 4 lab image; `trivy fs` và `trivy edge image` trong job `secrets`. Cờ: `--severity HIGH,CRITICAL --ignore-unfixed --exit-code 1`. ⚠️ Bước này **chưa từng chạy** cho tới 2026-09-18 vì tag action sai — xem §13.6 |
 | ✅ | `.github/workflows/ci.yml` | `go vet` → `golangci-lint run`; `go test` → `-coverprofile` + sàn **16.5%** (số của cây lúc thêm bước này là 16.8%). Bánh cóc: nâng khi coverage lên, không hạ để build xanh |
 | ✅ | `.trivyignore` | Rỗng có chủ ý, chỉ còn quy tắc: mỗi dòng bỏ qua **phải có `exp:<ngày>`** kèm lý do. Không hạn = tắt scanner cho CVE đó vĩnh viễn |
@@ -865,7 +888,7 @@ Giữ lại đây một dòng mỗi lỗi vì lý do vẫn còn giá trị; chi 
 | ✅ | `src/api/labs.ts` | `??` → `\|\|` cho `VITE_API_URL`: `new URL(path, "")` ném `TypeError: Invalid base URL`, nên base rỗng phải rơi về `location.origin` |
 | ✅ | `src/components/LabTerminal.tsx` | Reconnect có backoff khi socket đứt bất thường (mã 1006). Không có nó thì **mỗi lần deploy đá cả lớp ra khỏi terminal** |
 | ✅ | `src/lib/wsRetry.ts` + `.check.ts` | Quy tắc "đóng sạch = phiên kết thúc, đóng bất thường = thử lại" tách ra khỏi component và có assert riêng. Đăng ký trong `npm run check` |
-| ✅ | `.github/workflows/ci.yml` | Thêm `trivy fs`, job `image` (master: build → `trivy image` → push `devforge-web:sha-<short>`), job `promote` (tag: `imagetools create` sang `:v1.2.0`). Vẫn **không có** job deploy |
+| ✅ | `.github/workflows/ci.yml` | Thêm `trivy fs`, job `image` (**chỉ tag `v*`**: tag phải trên master → build → `trivy image` → push `devforge-web:v1.2.0`). Nhánh không build gì. Vẫn **không có** job deploy |
 | ✅ | `.env` local | `VITE_API_URL=http://localhost:8888` khớp `PORT=8888` trong `devforge-be/.env`. Hai file `.env.example` vẫn ghi 8080 và cũng khớp nhau — không đụng, đổi một bên là làm hỏng máy của người đang dùng bên kia |
 
 ### 13.4 Thứ tự
@@ -874,10 +897,10 @@ Giữ lại đây một dòng mỗi lỗi vì lý do vẫn còn giá trị; chi 
 
 ```
 ✅ reconnect terminal (fe)             ← thứ đáng làm nhất, và không nằm trong pipeline
-✅ pipeline artifact: build một lần trên master → GHCR :sha-<short>
+✅ pipeline artifact: build khi cắt tag → quét → GHCR :v1.2.0
 ✅ trivy image (api + 4 lab) trước bước push, trivy fs cho dependency
 ✅ golangci-lint thay go vet + sàn coverage
-✅ promote theo tag + cổng xuyên repo qua registry + make release
+✅ cổng xuyên repo qua registry + make release + release-guard (13 ca kiểm)
 ✅ Caddy → nginx: devforge.conf + certs/, compose đổi service, deploy/caddy/ xoá
 ✅ bootstrap.sh cho template Hostinger, .env.prod.example khớp bảng §8
 ✅ make check-edge — 14 route của biên, chạy được trên máy dev
@@ -897,10 +920,10 @@ Giữ lại đây một dòng mỗi lỗi vì lý do vẫn còn giá trị; chi 
 5. Bật CD = thêm 3 secret SSH, rồi make release v=v0.1.1, xem nó chạy hết đường
 6. Diễn tập rollback bằng tay: IMAGE_TAG=<tag cũ> docker compose up -d --wait
 7. Bật Authenticated Origin Pulls  ← sau khi site đã chạy, thứ tự ở DEPLOY.md §1
-8. VPS thứ hai cho staging       ← đã chốt mua, §8 "Staging"
+8. VPS thứ hai cho staging       ← tuỳ chọn, §8 "Staging"
    bootstrap.sh + .env theo khối STAGING ở cuối .env.prod.example
    DNS staging.<domain> + Google redirect URI thứ hai
-   3 secret STAGING_SSH_* → job deploy-staging tự bật (deploy `:master`)
+   deploy bằng tay: IMAGE_TAG=<tag> ./deploy/up.sh — không còn job tự động
 9. SonarQube Cloud: tạo tài khoản, bind 2 repo, dán SONAR_TOKEN
    ← job `sonar` đã có sẵn và đang tự bỏ qua; token là thứ bật nó lên
    ← đối chiếu sonar.projectKey/sonar.organization với UI ở lần chạy đầu
@@ -911,7 +934,7 @@ danh sách này, cộng một mục cho lỗi 502-sau-deploy.
 
 Bước 4 và bước 6 là hai bước hay bị bỏ nhất và cũng là hai bước duy nhất chứng minh được lưới an toàn có thật.
 
-⚠️ **Bước 3 có một cái bẫy của lần đầu.** `promote` đòi image `:sha-<short>` của commit được tag phải có sẵn trên GHCR, mà image chỉ được build khi push **master**. Nên tag đầu tiên phải cắt trên một commit đã đi qua master **sau khi** job `images` tồn tại. Tag một commit cũ hơn thì `promote` dừng và nói thẳng lý do.
+⚠️ **Tag là thứ duy nhất build, nên tag đầu tiên là lần đầu toàn bộ đường build chạy thật.** Không có bước nào trước đó dựng image, nên không có gì để so. Cắt một tag thử (`v0.0.1-rc1` chẳng hạn) trước khi cắt tag thật: nó đi hết build, quét, push, rồi dừng ở job `deploy` vì chưa có `SSH_HOST` — đúng thứ cần biết, không chạm vào máy nào.
 
 ### 13.5 Kiểm chứng sau khi lên
 
@@ -940,5 +963,5 @@ Trên trình duyệt, những thứ chỉ hỏng ở prod nên phải nhìn tậ
 | ~~trivy quét image~~ | **Đã làm — và lần chạy thật đầu tiên là 2026-09-18.** Từ lúc thêm cho tới hôm đó nó chưa từng thực thi: `aquasecurity/trivy-action@0.28.0` không phải tag có thật (upstream có `v` ở đầu), nên job chết ở "Set up job" trên mọi nhánh kể cả master. Lần chạy thật đầu tiên ra 3 CVE Go (2 CRITICAL ở `pgx`), 1 HIGH npm, 17 HIGH trong binary Caddy của image `devforge-web`, và 39 HIGH trong `nginx:1.27-alpine` mà biên đang ghim. Bài học không phải về trivy: **một bước CI chưa từng thấy đỏ cũng chưa từng thấy xanh** |
 | ~~SonarCloud~~ | **Hết là nợ.** Job `sonar` đã có ở cả hai repo, gate chặn bằng `sonar.qualitygate.wait=true`, và nó tự bỏ qua tới khi có `SONAR_TOKEN` — §13.4 bước 9. Tự dựng SonarQube thì **không bao giờ** trên box này, §9.4 |
 | Reconnect cho WebSocket chat | `LabTerminal` đã có; `src/api/chat.ts` dùng chung `terminalURL` nhưng chưa dùng chung phần thử lại. Ít đau hơn: mất một socket chat không giết một phiên lab |
-| ~~Staging BE~~ | **Hết là nợ.** Đã chốt mua VPS thứ hai và job `deploy-staging` đã có; còn lại là mua máy — §13.4 bước 7 |
+| Staging BE | **Quay lại thành nợ, nhỏ hơn.** Job `deploy-staging` đã bị bỏ khi nhánh thôi build — nó deploy tag trôi `:master` mà giờ không ai đẩy nữa. Máy staging vẫn dựng được bằng `bootstrap.sh` và deploy bằng tay với đúng tag production dùng; cái mất là phần tự động |
 | Bỏ Redis (dồn session vào Postgres) | Đang chạy, 0 cấu hình. Lãi một container, không đáng ưu tiên |
