@@ -337,7 +337,13 @@ Quét `fs` bắt `go.sum` và `package-lock.json` — lỗ hổng ở dependency
 
 **4. SonarQube — không tự dựng, không bàn thêm.** Nó là app JVM cần Postgres riêng, sàn 2–4 GB. Box là KVM2 2 vCPU và §9.4 đã chốt **CPU là trần**: ghế lab chính là sản phẩm. Dựng Sonar ở đó là lấy ghế học viên nuôi một cái dashboard.
 
-**SonarCloud** (SaaS, 0₫ cho repo public) là đường duy nhất còn lại — và nó đứng **sau** mục 3. `golangci-lint` + ngưỡng coverage đóng phần lớn giá trị mà không cần tài khoản nào. Cái SonarCloud hơn thật là lịch sử, duplication và biểu đồ theo thời gian, không phải bản thân cái gate.
+**SonarQube Cloud** (SaaS, 0₫ cho repo public) là đường duy nhất còn lại. **Job `sonar` đã có ở cả hai repo** (`SonarSource/sonarqube-scan-action@v8.2.2` + `sonar-project.properties`), và nó **tự bỏ qua khi chưa có `SONAR_TOKEN`** — cùng cách `deploy`/`deploy-staging` bỏ qua khi chưa có secret SSH. Còn lại đúng một việc tay: tạo tài khoản, bind repo, dán token.
+
+Cổng là thật chứ không phải báo cáo: `sonar.qualitygate.wait=true` trong `sonar-project.properties` làm job đỏ khi Quality Gate trượt. Không có dòng đó thì phân tích vẫn upload, dashboard vẫn đỏ, mà CI vẫn xanh.
+
+⚠️ `sonar.projectKey` và `sonar.organization` là **bắt buộc** với Cloud và không đặt được trong UI. Giá trị trong file đang là quy ước (`TuqL3_<repo>` / `tuql3`) — đối chiếu với UI ở lần chạy đầu.
+
+Cái SonarQube Cloud hơn `golangci-lint` + ngưỡng coverage là lịch sử, duplication và biểu đồ theo thời gian, cộng khái niệm **new code**: gate chấm phần diff chứ không chấm cả quá khứ tích tụ.
 
 ---
 
@@ -579,7 +585,7 @@ arm64 của bản cũ bỏ đi vì không còn tác dụng.
 | CI/CD | GitHub Actions (repo public, không giới hạn phút) | 0₫ |
 | Quét lỗ hổng | Trivy (OSS, chạy trong Actions) | 0₫ |
 | Lint + coverage | golangci-lint (OSS, chạy trong Actions) | 0₫ |
-| Chất lượng mã | SonarCloud, repo public — ⏳ chưa bật, §8 | 0₫ |
+| Chất lượng mã | SonarQube Cloud, repo public — job `sonar` đã có, chờ `SONAR_TOKEN`, §8 | 0₫ |
 | Backup | Cloudflare R2, 10 GB, egress 0₫ | 0₫ |
 | Email | Resend 3000/tháng hoặc Brevo 300/ngày | 0₫ |
 | Metrics + log + alert | Grafana Cloud Free | 0₫ — ⏳ chưa bật, §1 |
@@ -895,7 +901,9 @@ Giữ lại đây một dòng mỗi lỗi vì lý do vẫn còn giá trị; chi 
    bootstrap.sh + .env theo khối STAGING ở cuối .env.prod.example
    DNS staging.<domain> + Google redirect URI thứ hai
    3 secret STAGING_SSH_* → job deploy-staging tự bật (deploy `:master`)
-9. SonarCloud                    ← đã có số coverage để gate
+9. SonarQube Cloud: tạo tài khoản, bind 2 repo, dán SONAR_TOKEN
+   ← job `sonar` đã có sẵn và đang tự bỏ qua; token là thứ bật nó lên
+   ← đối chiếu sonar.projectKey/sonar.organization với UI ở lần chạy đầu
 ```
 
 Runbook từng bước: [deploy/DEPLOY.md](deploy/DEPLOY.md). Nó đánh số theo đúng
@@ -930,7 +938,7 @@ Trên trình duyệt, những thứ chỉ hỏng ở prod nên phải nhìn tậ
 | ~~Uptime monitor ngoài~~ | Đã chuyển lên 13.1 — quá rẻ để xếp vào nợ |
 | ~~Sentry~~ | Đã chuyển lên 13.1, cùng lý do |
 | ~~trivy quét image~~ | **Đã làm — và lần chạy thật đầu tiên là 2026-09-18.** Từ lúc thêm cho tới hôm đó nó chưa từng thực thi: `aquasecurity/trivy-action@0.28.0` không phải tag có thật (upstream có `v` ở đầu), nên job chết ở "Set up job" trên mọi nhánh kể cả master. Lần chạy thật đầu tiên ra 3 CVE Go (2 CRITICAL ở `pgx`), 1 HIGH npm, 17 HIGH trong binary Caddy của image `devforge-web`, và 39 HIGH trong `nginx:1.27-alpine` mà biên đang ghim. Bài học không phải về trivy: **một bước CI chưa từng thấy đỏ cũng chưa từng thấy xanh** |
-| SonarCloud | `golangci-lint` + sàn coverage đã có, nên rào cản đã hết — còn lại là việc tạo tài khoản (§13.4 bước 8, SonarCloud). Tự dựng SonarQube thì **không bao giờ** trên box này — §9.4 |
+| ~~SonarCloud~~ | **Hết là nợ.** Job `sonar` đã có ở cả hai repo, gate chặn bằng `sonar.qualitygate.wait=true`, và nó tự bỏ qua tới khi có `SONAR_TOKEN` — §13.4 bước 9. Tự dựng SonarQube thì **không bao giờ** trên box này, §9.4 |
 | Reconnect cho WebSocket chat | `LabTerminal` đã có; `src/api/chat.ts` dùng chung `terminalURL` nhưng chưa dùng chung phần thử lại. Ít đau hơn: mất một socket chat không giết một phiên lab |
 | ~~Staging BE~~ | **Hết là nợ.** Đã chốt mua VPS thứ hai và job `deploy-staging` đã có; còn lại là mua máy — §13.4 bước 7 |
 | Bỏ Redis (dồn session vào Postgres) | Đang chạy, 0 cấu hình. Lãi một container, không đáng ưu tiên |
