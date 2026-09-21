@@ -1,0 +1,18 @@
+# Extends the default ruleset rather than replacing it — a bare config file here
+# would silently disable every built-in rule.
+[extend]
+useDefault = true
+
+# The default `generic-api-key` rule fires on `sonar.projectKey=TuqL3_devfore-be`:
+# the property name ends in "Key" and the value has entropy 3.70. It is not a
+# credential. A SonarQube Cloud project key and organization key are public
+# identifiers — they appear in the project URL, in the badge markdown, and in
+# this file by necessity, since neither can be set from the UI. The only real
+# secret in this integration is SONAR_TOKEN, which lives in GitHub secrets.
+#
+# Scoped to the two property names rather than to the whole file, so a real key
+# committed into sonar-project.properties later is still caught.
+[[allowlists]]
+description = "SonarQube Cloud project and organization keys are public identifiers"
+regexTarget = "line"
+regexes = ['''(?m)^sonar\.(projectKey|organization)=''']
