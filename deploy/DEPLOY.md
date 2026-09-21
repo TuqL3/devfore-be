@@ -34,7 +34,7 @@ Chín bước, và thứ tự là bắt buộc — INFRA.md §13.4 là bản g�
 6. R2 + backup tay + DIỄN TẬP RESTORE          §6   ← đừng để sau
 7. Bật CD: thêm 3 secret SSH, cắt tag tiếp     §7
 8. Diễn tập rollback                           §8
-9. Máy staging                                 §9
+9. Máy staging — HOÃN, chưa làm                §9
 ```
 
 Bước 6 và bước 8 là hai bước hay bị bỏ nhất, và là hai bước duy nhất chứng minh
@@ -71,8 +71,9 @@ Cloudflare → origin đi bằng http, tức là cookie phiên đi trần trên 
 `X-Forwarded-Proto` nói dối.
 
 **Origin Certificate.** Cloudflare → SSL/TLS → Origin Server → Create
-Certificate, cho `<domain>` **và** `*.<domain>` (dấu sao là thứ để cùng một file
-phục vụ luôn `staging.<domain>`). Lưu hai phần:
+Certificate, cho `<domain>` **và** `*.<domain>`. Dấu sao chưa dùng tới lúc này —
+staging đang hoãn — nhưng cert Origin sống 15 năm và thêm nó bây giờ tốn 0 giây,
+còn cấp lại cert vì thiếu một dòng thì tốn một lần ngừng dịch vụ. Lưu hai phần:
 
 ```
 deploy/nginx/certs/origin.pem     # certificate
@@ -103,7 +104,8 @@ Cloudflare chưa gửi, và site trả 400 cho tất cả, kể cả bạn.
 `docker login ghcr.io` bằng PAT chỉ để pull bản phát hành của chính mình.
 
 **Google Console.** Redirect URI `https://<domain>/api/auth/google/callback`,
-khớp từng ký tự. Đăng ký luôn cái thứ hai cho staging ở bước §9.
+khớp từng ký tự. **Một cái là đủ** — URI thứ hai cho staging chỉ cần khi nào dựng
+staging, và việc đó đang hoãn.
 
 **R2.** Tạo bucket + lifecycle xoá sau 30 ngày.
 
@@ -369,7 +371,21 @@ image là bản cũ** — cả hai bắt buộc tương thích ngược.
 
 ---
 
-## 9. Máy staging
+## 9. Máy staging — HOÃN
+
+> **Chưa làm.** Quyết định ngày 2026-09-21: tạm thời không dựng staging. Mục này
+> giữ nguyên để lúc cần thì có sẵn, nhưng **không nằm trong đường đi lên
+> production**. Bỏ qua nó và dừng ở §8.
+>
+> Cái mất, nói thẳng: không có chỗ nào diễn tập trước khi chạm production. Danh
+> sách lỗi ở §8 của `INFRA.md` — `TRUSTED_PROXIES` sau hai lớp proxy,
+> `/uploads/*` với `PUBLIC_URL`, OAuth redirect thật, cert Origin + mây cam,
+> khối bot đứng trước route bắt-tất-cả, migration ba bước — đều là loại chỉ lộ
+> ra trên máy thật. Không có staging thì máy thật đó là production.
+>
+> Thứ thay thế rẻ nhất: cắt một tag `-rc` và xem CI build/quét/push xanh trước
+> khi cắt tag thật (§4). Nó bắt được lỗi build và CVE, không bắt được lỗi cấu
+> hình biên.
 
 VPS thứ hai, **loại nhỏ nhất**, cùng vùng. Máy riêng chứ không phải stack thứ
 hai trên máy prod.
