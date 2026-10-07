@@ -108,28 +108,15 @@ cover: ## Đo coverage như CI đo, sàn 16.5% (cần `make up` trước, như `
 	go test -coverprofile=cover.out ./...
 	@go tool cover -func=cover.out | tail -1
 
-# A release is one version number worn by both repos. Nothing enforces that in
-# git — two repositories have two independent tag namespaces and only the name
-# ties them together — so the forgettable half is scripted here. The gate that
-# catches it anyway lives in CI: devforge-be's deploy job waits for the frontend
-# image at the same tag and fails the release if it never appears.
+# A release promotes what the dev box is serving: scripts/release.sh reads which
+# be and fe commit dev runs, tags exactly those in both repos, and the tag push
+# makes CI copy their dev-<sha> images to the version and deploy production
+# (INFRA.md §8 "CI/CD", §13.11). Nothing is built for a release.
 .PHONY: release
-release: ## Gắn tag cả hai repo rồi push: make release v=v1.2.0
-	@test -n "$(v)" || { echo "usage: make release v=v1.2.0"; exit 1; }
-	@test -n "$(FE)" || { echo "no frontend clone next to this one"; exit 1; }
-	@# Same guard CI runs, so a name that is refused here is refused there and
-	@# a name accepted here cannot surprise the deploy job.
-	@./scripts/release-guard.sh "$(v)"
-	@# Never move a tag that already exists. The image for it has been built and
-	@# possibly deployed; repointing the name makes that release unreproducible
-	@# and a rollback a guess. Cut v1.2.1 instead.
-	@for d in . $(FE); do \
-	  git -C $$d rev-parse -q --verify refs/tags/$(v) >/dev/null \
-	    && { echo "$$d already has $(v) — cut the next patch version instead"; exit 1; }; \
-	  test -z "$$(git -C $$d status --porcelain)" \
-	    || { echo "$$d has uncommitted changes"; exit 1; }; \
-	done; true
-	@for d in . $(FE); do \
-	  git -C $$d tag -a $(v) -m $(v) && git -C $$d push origin $(v) || exit 1; \
-	done
-	@echo "==> tagged $(v) in both repos; Actions now builds, scans and pushes both, then deploys"
+release: ## Promote bản đang chạy trên dev lên prod: make release v=v1.3.0 (cần DEV_SSH)
+	@test -n "$(v)" || { echo "usage: make release v=v1.3.0"; exit 1; }
+	@FE="$(FE)" ./scripts/release.sh "$(v)"
+
+.PHONY: check-release
+check-release: ## Kiểm scripts/release.sh — tag đúng commit dev đang chạy, từ chối đúng chỗ
+	./scripts/release.check.sh

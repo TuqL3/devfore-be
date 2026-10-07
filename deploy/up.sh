@@ -5,7 +5,7 @@
 #
 # Nothing is built here any more. Images come from GHCR, built once in Actions,
 # scanned there, and promoted by tag (INFRA.md §8): the bits that went through CI
-# and staging are the bits that serve production. A rebuild on the box would be
+# and the dev box are the bits that serve production. A rebuild on the box would be
 # a different artifact wearing the same version number.
 #
 # The direct payoff is rollback. It used to mean recompiling the previous commit
@@ -22,8 +22,11 @@ cd "$(dirname "$0")/.."
 # a person on the box — and the runbook (INFRA.md §13.4) has someone run this
 # script by hand.
 #
-# -n, not a wait: a second deploy queued behind a first is a deploy nobody is
-# watching any more. Fail loudly and let whoever pushed decide.
+# -n by default, not a wait: a second production deploy queued behind a first
+# is a deploy nobody is watching any more. Fail loudly and let whoever pushed
+# decide. DEPLOY_WAIT=<seconds> waits instead, for the dev box: both repos
+# deploy there on every push to develop, and two pushes landing together is the
+# normal case, not an accident.
 #
 # The lock is a read-only fd on this checkout's own directory, not a lock file.
 # A file under /run/lock would be created by whoever deployed first: one `sudo
@@ -32,7 +35,11 @@ cd "$(dirname "$0")/.."
 # already had once. A directory both users can read has no such state, leaves
 # nothing behind, and scopes the lock to the deployment rather than the host.
 exec 9<"$PWD"
-flock -n 9 || { echo "another deploy already holds $PWD — refusing to run two at once" >&2; exit 1; }
+if [ -n "${DEPLOY_WAIT:-}" ]; then
+  flock -w "$DEPLOY_WAIT" 9 || { echo "waited ${DEPLOY_WAIT}s for another deploy of $PWD — giving up" >&2; exit 1; }
+else
+  flock -n 9 || { echo "another deploy already holds $PWD — refusing to run two at once" >&2; exit 1; }
+fi
 
 COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.prod.yml)
 NETWORK=devforge-be_default
@@ -41,6 +48,11 @@ LABS=(linux git docker net)
 # This is the rollback target, and a file rather than `git rev-parse` because
 # the thing being rolled back is an image now, not a checkout.
 TAG_FILE=.image-tag
+# Which commit of each repo is serving, read from the images' revision labels.
+# On the dev box this is what a release promotes (scripts/release.sh), so it is
+# removed before every deploy and written back only once the stack is healthy:
+# a release must never name what dev was running before a deploy that broke.
+DEPLOYED_FILE=.deployed
 
 [ -f .env ] || { echo "no .env — copy .env.prod.example and fill it in"; exit 1; }
 set -a; . ./.env; set +a
@@ -91,11 +103,21 @@ release() {
   IMAGE_TAG=$tag "${COMPOSE[@]}" up -d --wait --wait-timeout 120
 }
 
+revision() {
+  docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+    "$IMAGE_REPO/devforge-$1:$2" 2>/dev/null || true
+}
+record() {
+  printf 'tag=%s\nbe=%s\nfe=%s\n' "$1" "$(revision api "$1")" "$(revision web "$1")" > "$DEPLOYED_FILE"
+}
+
 echo "==> releasing $IMAGE_TAG (currently ${PREV:-none})"
+rm -f "$DEPLOYED_FILE"
 pull "$IMAGE_TAG"
 
 if release "$IMAGE_TAG"; then
   echo "$IMAGE_TAG" > "$TAG_FILE"
+  record "$IMAGE_TAG"
   echo "==> healthy on $IMAGE_TAG"
   docker image prune -f >/dev/null
   exit 0
@@ -110,6 +132,14 @@ if [ -z "$PREV" ]; then
   exit 1
 fi
 
+# The dev box deploys the moving tag `develop` every time, so "the previous tag"
+# is the one that just failed and pulling it again changes nothing. Dev is fixed
+# forward: push a fix to develop.
+if [ "$PREV" = "$IMAGE_TAG" ]; then
+  echo "==> $IMAGE_TAG is a moving tag — nothing different to roll back to. Fix forward." >&2
+  exit 1
+fi
+
 echo "==> rolling back to $PREV" >&2
 # Only the image goes back. The checkout stays on the failed tag, which is
 # harmless — CD force-checks-out the next tag rather than pulling, so there is
@@ -118,6 +148,7 @@ echo "==> rolling back to $PREV" >&2
 # compatible with the previous image for exactly this reason.
 pull "$PREV"
 if release "$PREV" skip-migrate; then
+  record "$PREV"
   echo "==> rolled back and healthy on $PREV" >&2
 else
   echo "==> ROLLBACK ALSO UNHEALTHY — look at the box" >&2

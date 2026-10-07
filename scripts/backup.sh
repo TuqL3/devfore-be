@@ -3,9 +3,9 @@
 #
 #   15 3 * * * cd /opt/devforge/devforge-be && ./scripts/backup.sh >> /var/log/devforge-backup.log 2>&1
 #
-# This is the first thing that has to work, not the last. Hostinger's own weekly
-# snapshot is on and is faster to restore from, but it lives in the same account
-# as the box: one lost account loses both. The dump on R2 is the copy that is
+# This is the first thing that has to work, not the last. Linode Backups is on
+# and is faster to restore from, but it lives in the same account as the box:
+# one lost account loses both. The dump on R2 is the copy that is
 # somewhere else (INFRA.md §9.7).
 #
 # Retention is an R2 lifecycle rule (delete after 30 days), not code here.
