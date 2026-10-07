@@ -10,5 +10,17 @@
 #   CVE-2024-12345 exp:2026-12-31   # why, and what has to happen before then
 #
 # Scans already pass --ignore-unfixed, so anything landing here has a patch
-# available and was skipped on purpose. Empty on purpose: nothing has been
-# skipped yet, and it should stay that way for as long as possible.
+# available and was skipped on purpose. Keep this list as short as possible.
+
+# nginx:1.31-alpine, the edge image docker-compose.prod.yml pulls (scanned by
+# the `secrets` job). Fixed in Alpine, not yet in any nginx image: 1.31.6
+# (2026-09-26) is the newest tag. Remove both lines as soon as a rebuilt
+# 1.31-alpine scans clean — or by the date, when CI goes red again and forces it.
+# devforge-web is not covered here: its Dockerfile runs `apk upgrade`.
+#
+# libexpat — /usr/sbin/nginx does not link it (only the fontconfig tools do) and
+# no dynamic module is loaded, so the edge never parses XML with it.
+CVE-2026-93990 exp:2026-11-06
+# pcre2 — nginx links it, but the bug needs a crafted *pattern*; every pattern
+# nginx compiles comes from deploy/nginx/devforge.conf, not from requests.
+CVE-2026-103111 exp:2026-11-06
