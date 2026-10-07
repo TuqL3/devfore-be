@@ -1,973 +1,1343 @@
-# DevForge — hạ tầng & triển khai
+# DevForge — infrastructure & deployment
 
-Tách khỏi [README.md](README.md) vì nó chiếm hơn nửa tài liệu và gần như không ai
-đọc nó cùng lúc với phần sản phẩm. Nội dung không đổi một chữ nào khi tách.
+The one document for infrastructure: environments, configuration, CI/CD, the
+production box, and the runbook that takes the project from "no server" to
+"running, monitored and backed up". It replaces the former `INFRA.md` +
+`deploy/DEPLOY.md` pair; both are still in `git log -- INFRA.md deploy/DEPLOY.md`.
 
-**Số mục giữ nguyên: §8, §9, §13.** Hai file là một tài liệu cắt làm đôi, nên mọi
-tham chiếu `§9.2` trong code và trong README vẫn trỏ đúng chỗ. README giữ §0–§7 và
-§10–§12.
+**Section numbers §8, §9, §13 and §14 are fixed.** README holds §0–§7 and §10–§12, and
+comments in `deploy/up.sh`, `deploy/bootstrap.sh`, `.github/workflows/ci.yml`,
+`docker-compose.prod.yml`, `deploy/nginx/devforge.conf`, `.env.prod.example`,
+`scripts/backup.sh` and `scripts/edge-routes.check.sh` cite them. Renumber
+anything here → `grep -rn 'INFRA.md §' .` and fix every hit.
 
-| | |
-| --- | --- |
-| §8 | Môi trường, biến, routing, migration, CI/CD, quét bảo mật, staging |
-| §9 | Hạ tầng production: máy, GHCR, chi phí, sức chứa, proxy, rủi ro, bẫy |
-| §13 | Việc còn phải làm để lên được máy thật |
-
-Runbook thao tác trên máy nằm ở [deploy/DEPLOY.md](deploy/DEPLOY.md).
+| I need to…                          | Go to                                      |
+| ----------------------------------- | ------------------------------------------ |
+| Run the stack on my machine         | §8.1, then README §12                      |
+| Know what a variable does           | §8 "Environment variables"                 |
+| Cut a release                       | `make release v=vX.Y.Z` — §13.11           |
+| Get from zero to production         | §13.4 (the ordered list), then §13.1–§13.7 |
+| Roll back                           | §13.8                                      |
+| Restore the database                | §13.7                                      |
+| Fix a 502, a red Trivy, a full disk | §13.9                                      |
+| See what is still open              | §13.0, §13.10                              |
+| Name a branch, open a PR            | §8 "Branching"                             |
+| Plan a sprint release               | §13.11                                     |
+| Production has a bug                | §13.12                                     |
+| Know why it is built this way       | §8.0, §14                                  |
 
 ---
 
-## 8. Môi trường
+## 8. Environments, configuration, CI/CD
 
-**Một `Dockerfile` cho mọi nơi — áp dụng cho API (Go).** Cùng file build ra image chạy local lẫn prod; khác nhau chỉ ở env var inject lúc chạy. Không có `Dockerfile.prod` riêng.
+### 8.0 Design principles
 
-Image **build một lần ở GitHub Actions rồi đẩy lên GHCR**, máy prod chỉ `pull`. Cả hai đều amd64 nên không có QEMU ở giữa (§9.2). Hệ quả nằm ở rollback, xem ngay dưới bảng.
+Six rules nearly every team that ships software follows, and where each one
+lives here. Everything else in this document is a consequence of them.
 
-> **FE cũng là một image, và cũng dùng chung được cho mọi môi trường.** Vite bake `VITE_API_URL` lúc build, nên bất kỳ giá trị nào khác rỗng đều làm image dính chặt vào một môi trường: bản build cho staging không bao giờ là bản lên production. Cách thoát nằm ở chỗ **không bake gì cả**.
->
-> `devforge-fe/Dockerfile` ghim `ENV VITE_API_URL=""` — không phải `ARG`, nên không có gì để quên truyền. Bundle gọi đường dẫn tương đối, và biên đã route `/api`, `/ws`, `/uploads` sang API trên **cùng origin** (`deploy/nginx/devforge.conf`). Một image chạy được mọi môi trường; xem §9.1.1 vì sao phương án Cloudflare Pages bị đảo lại.
->
-> ⚠️ **Rỗng thì `fetch` sống nhưng `new URL` chết.** `new URL(path, "")` ném `TypeError: Invalid base URL`, nên `src/api/labs.ts` dùng `||` chứ không `??`: `import.meta.env.VITE_API_URL || location.origin`. Dev không đổi — không có biến thì vẫn rơi về `http://localhost:8080`.
+| # | Principle                                   | Here                                                                                      |
+| - | ------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| 1 | **Build once, promote everywhere**          | images built only on a push to `develop`; a release re-tags the image dev ran (§8 "CI/CD") |
+| 2 | **Same artifact, different config**         | one image per service for dev and prod; only `.env` differs (§8.1)                        |
+| 3 | **Production is isolated**                  | its own Linode, its own SSH key, secrets only in the `production` environment, approval to deploy |
+| 4 | **No real data outside production**         | dev runs demo seed only; production is never copied down (§8 "Dev environment")          |
+| 5 | **Non-production is private**               | `dev.<domain>` behind Cloudflare Access                                                   |
+| 6 | **Mitigate first, fix second**              | a bad release is rolled back in seconds; the fix goes through the normal flow (§13.12)    |
 
-|           | local                          | production                                                              |
-| --------- | ------------------------------ | ----------------------------------------------------------------------- |
-| Chạy bằng | `docker compose up`            | `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d` |
-| Kiến trúc | amd64                          | amd64 (Hostinger KVM) — xem §9.2                                        |
-| Nguồn image | build tại chỗ                | `ghcr.io/<owner>/devforge-api:<tag>` + `devforge-web` + 4 `devforge-lab-*` |
-| Config    | `.env` (từ `.env.example`)     | env file trên server, `chmod 600`, chủ sở hữu là user chạy compose      |
-| DB        | postgres container, seed giả   | postgres volume + snapshot Hostinger + pg_dump cron → R2                |
-| TLS       | không                          | nginx + Cloudflare Origin Certificate (§9.5)                            |
-| FE        | `vite dev` trên host           | image `devforge-web`, cùng box cùng origin (§9.1.1)                     |
-| Log       | stdout                         | stdout → `docker compose logs` (chưa có gom log, §1)                    |
-| Deploy    | hot reload (`air`, `vite dev`) | tag `v*` → Actions build + quét → GHCR → SSH → `up.sh` (pull + `up -d --wait`) |
+Where DevForge sits among real-world setups:
 
-⚠️ **Một stack chỉ gọi tên được bằng một cái tên cả hai repo cùng đặt.**
-`deploy/up.sh` kéo `api`, `web` và 4 image lab bằng **cùng một** `IMAGE_TAG`;
-`api` và 4 lab đến từ repo be, `web` đến từ repo fe. Sha của hai repo không bằng
-nhau, nên `IMAGE_TAG=sha-<của be>` kéo được 5 image rồi chết ở
-`devforge-web:sha-<của be>` — một tag không tồn tại và sẽ không bao giờ tồn tại.
-Đó là lý do tag phiên bản là tên duy nhất được dùng, và là lý do không còn tên
-nào khác được đẩy lên registry:
+| Team size        | Typical environments                                  | Typical infrastructure                         |
+| ---------------- | ----------------------------------------------------- | ---------------------------------------------- |
+| **1–5 devs**     | local → staging/dev → prod                            | PaaS, or 1–2 VPS + Compose — **this project**  |
+| 10–50 devs       | local → preview per PR → staging → prod               | Kubernetes, Terraform, GitOps (Argo CD)        |
+| Enterprise       | dev → QA → staging/UAT → prod (+ perf, DR)            | one cloud account per environment, IaC         |
 
-- **Tag `vX.Y.Z` là tên duy nhất gọi được một stack** — thứ duy nhất cả hai repo
-  cùng đặt lên image của mình. Đó là lý do tag phiên bản tồn tại, chứ không phải
-  để cho đẹp. `deploy/DEPLOY.md` §4 từng bảo dùng một tag bất kỳ; đã sửa.
-- **Không còn tag `sha-<short>` và không còn tag trôi `:master`.** Chỉ tag mới
-  build, nên registry chỉ chứa đúng những cái tên có thể deploy được. Cái tag
-  trôi từng tồn tại để staging có thứ gì đó gọi tên cả stack; giờ không job nào
-  deploy staging nữa, nên nó không còn việc gì để làm. Bỏ nó cũng bỏ luôn cái
-  bẫy kèm theo: `.image-tag` ghi `master` thì không có đích để lùi về.
+Not adopted, on purpose, until the team or the service count grows:
+Kubernetes, Terraform, per-PR preview environments, feature flags, a monorepo.
 
-**Rollback = đổi tag, không phải build lại.** `deploy/up.sh` ghi tag đang chạy vào `.image-tag` sau mỗi lần khoẻ, và lấy chính nó làm đích lùi: `IMAGE_TAG=<tag-cũ> docker compose up -d --wait` — vài giây, vì image cũ đã nằm sẵn ở GHCR và trong cache của box. Đây là lãi trực tiếp của việc rời ARM (§9.2); bản Oracle cũ phải build lại 1–2 phút trong lúc bản lỗi vẫn đang phục vụ.
+### 8.1 Three environments
 
-Rollback **chỉ lùi image**, không lùi schema và không chạy lại migration — xem "Migration tương thích ngược" bên dưới, và ba chi tiết ở phần CI/CD.
+One `Dockerfile` per repo, used everywhere. The same image runs on dev and in
+production; only the env injected at run time differs. There is no
+`Dockerfile.prod`. Dev and production also share one compose setup and one
+`up.sh` — they differ in their `.env` and nothing else.
 
-### Biến môi trường
+|              | local                                   | dev                                                      | production                                              |
+| ------------ | --------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------- |
+| Purpose      | write code                              | integrate and test everything merged to `develop`        | serve users                                             |
+| Where        | laptop                                  | own Linode, Shared 2 GB, Singapore                       | own Linode, Shared 4 vCPU / 8 GB, Singapore (§9.1)      |
+| URL          | `localhost`                             | `https://dev.<domain>` behind Cloudflare Access          | `https://<domain>`                                      |
+| Runs with    | `docker compose --profile dev` + `air` + Vite | base + prod compose via `up.sh`                    | base + prod compose via `up.sh`                         |
+| Images       | built locally (`make lab-images`)       | GHCR `:develop` (= newest `dev-<sha>`)                   | GHCR `:vX.Y.Z` = a `dev-<sha>` that ran on dev          |
+| Deployed by  | hot reload                              | every push to `develop`, either repo, automatically      | `make release` → tag → approval → CI                    |
+| Rollback     | —                                       | none, fix forward                                        | automatic on unhealthy; by hand §13.8                   |
+| Config       | `.env` from `.env.example`              | `.env` from the DEV block of `.env.prod.example`         | `.env` from `.env.prod.example`                         |
+| Data         | demo seed                               | demo seed — **never a copy of production**               | real                                                    |
+| Mail         | Mailpit, `http://localhost:8025`        | Mailpit, through an ssh tunnel                           | Resend or Brevo                                         |
+| AI           | optional                                | off (`AI_DAILY_LIMIT=0`)                                 | haiku, 3/day (§9.6)                                     |
+| Lab seats    | 40 (code default)                       | 3                                                        | 16 (§9.4)                                               |
+| Backup       | —                                       | none, on purpose                                         | Linode Backups + nightly `pg_dump` → R2                 |
+| TLS / edge   | none                                    | nginx + Origin cert (`*.<domain>`), orange cloud         | nginx + Origin cert, orange cloud (§9.5)                |
+| CI secrets   | —                                       | GitHub Environment `development` (both repos)            | GitHub Environment `production` (be only, reviewer)     |
 
-| Biến                                          | local                   | production             | Nguồn      |
-| --------------------------------------------- | ----------------------- | ---------------------- | ---------- |
-| `APP_ENV`                                     | development             | production             | compose    |
-| `PORT`                                        | 8080                    | 8080                   | compose    |
-| `LOG_LEVEL`                                   | debug                   | info                   | compose    |
-| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_NAME` | (compose)               | (compose)              | compose    |
-| `DB_PASSWORD`                                 | `.env` giả              | env file trên server   | **secret** |
-| `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB`  | localhost:6379          | (compose)              | compose    |
-| `COOKIE_DOMAIN`                               | (rỗng)                  | **(rỗng)** — host-only, cùng origin nên không cần gì khác | compose   |
-| `JWT_SECRET`                                  | `.env` giả              | env file trên server   | **secret** |
-| `ACCESS_TTL` / `REFRESH_TTL`                  | `15m` / `168h`          | `15m` / `168h`         | compose    |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`   | `.env`                  | env file trên server   | **secret** |
-| `GOOGLE_REDIRECT_URL`                         | `http://localhost:8080/api/auth/google/callback` | `https://<domain>/api/auth/google/callback` | compose |
-| `CORS_ORIGINS`                                | `http://localhost:5173` | `https://<domain>` — **giờ là thứ chặn/mở cả REST lẫn WebSocket**, không còn là dead weight | compose |
-| `FRONTEND_URL`                                | `http://localhost:5173` | `https://<domain>`      | compose   |
-| `PUBLIC_URL`                                  | `http://localhost:8080` | `https://<domain>` — **origin trần, không có `/api`** | compose |
-| `UPLOAD_DIR`                                  | `./uploads`             | `./uploads` (bind mount, xem "Domain & routing") | compose |
-| `TRUSTED_PROXIES`                             | `127.0.0.1,::1`         | `127.0.0.1,::1,172.16.0.0/12` — **bắt buộc, và chỉ là một nửa: nginx phải khôi phục IP thật từ Cloudflare, xem §9.5** | compose |
-| `DATABASE_URL` (migrate)                      | `sslmode=disable`       | `sslmode=disable` — xem ghi chú dưới bảng | **secret** |
-| `LAB_DOCKER_HOST`                             | `tcp://127.0.0.1:2375`  | `tcp://127.0.0.1:2375` | compose    |
-| `LAB_SESSION_TTL`                             | `60m`                   | `20m` (xem §9.4)       | compose    |
-| `MAX_CONTAINERS`                              | `40`                    | `12` — 2 vCPU, xem §9.4 | compose   |
-| `PUBLIC_RATE_LIMIT`                           | `60`                    | `60`                   | compose    |
-| `OPENROUTER_API_KEY`                          | (rỗng)                  | **(rỗng)** — xem §9.6  | **secret** |
-| `OPENROUTER_MODEL`                            | —                       | `anthropic/claude-haiku-4-5` | compose |
-| `AI_DAILY_LIMIT`                              | `10`                    | `3` (xem §9.6)         | compose    |
-| `SMTP_HOST` / `SMTP_PORT`                     | `localhost` / `1025` (Mailpit) | Resend hoặc Brevo / `587` | compose |
-| `SMTP_USER` / `SMTP_PASSWORD`                 | (rỗng — Mailpit không hỏi) | (bắt buộc)          | **secret** |
-| `MAIL_FROM`                                   | `no-reply@devforge.local` | `no-reply@<domain>`  | compose    |
-| `VERIFY_CODE_TTL` / `RESET_TOKEN_TTL` / `RESEND_COOLDOWN` | `10m` / `1h` / `60s` | như local        | compose    |
-| `VITE_API_URL` (FE, **build-time**)           | `http://localhost:8080` | **rỗng** — ghim `ENV VITE_API_URL=""` trong `devforge-fe/Dockerfile`, không phải biến của môi trường nào (§9.1.1) | Dockerfile |
-| `IMAGE_REPO`                                  | —                       | `ghcr.io/<owner>` chữ thường | env file |
-| `IMAGE_TAG`                                   | —                       | `<sha>` — CD truyền vào lúc gọi `up.sh` | CD |
+Local quick start (full walkthrough in README §12):
 
-⚠️ **`sslmode` là `disable` ở cả hai, và bảng này từng ghi `require` ở cột
-production — sai.** Container `postgres:16-alpine` không được cấu hình TLS ở đâu
-cả, nên `require` làm `migrate` chết ngay lần deploy đầu với `SSL is not enabled
-on the server`. Cái làm nó an toàn không phải TLS mà là phạm vi: kết nối không
-bao giờ rời mạng bridge của compose, và Postgres publish cổng ở `127.0.0.1` chứ
-không ra ngoài. Muốn thật sự bật TLS thì phải cấp cert cho chính container
-postgres trước — đó là một việc, không phải một chữ.
+```bash
+# devforge-be
+cp .env.example .env
+make migrate        # postgres, redis, mailpit, docker-proxy; migrations; demo seed; 4 lab images
+make air            # API with hot reload on $PORT
 
-**Nhóm SMTP là chỗ hỏng im lặng.** Local có Mailpit nuốt mọi thư nên không ai thấy thiếu; prod không có gì đứng thay, và mã xác thực với link reset mật khẩu là hai thứ duy nhất đi qua đường đó. Thiếu `SMTP_HOST` ở prod = người đăng ký mới không bao giờ vào được, không có lỗi nào nổ ở phía server.
-
-`.env.example` phải liệt kê đủ biến trên (giá trị giả).
-
-**Secret prod nằm trong env file trên server, sửa bằng tay — CD không đẩy secret từ GitHub Secrets xuống.** Actions chỉ giữ ba secret để mở được cửa: `SSH_HOST`, `SSH_USER`, `SSH_KEY`. Đổi lại là ba thay vì hơn chục, và không secret prod nào đi ngang qua Actions. Giá phải trả: thêm một biến môi trường nghĩa là một lần ssh, không phải một lần commit — và **file đó không có bản sao ở đâu cả**: `scripts/backup.sh` dump database chứ không dump config. Dựng lại máy từ đầu mà không có bản `.env` trong tay thì phải sinh lại toàn bộ khoá, và mọi phiên đăng nhập hiện có mất theo `JWT_SECRET`.
-
-### Healthcheck (điều kiện rollback)
-
-Đã có: `cmd/server/healthcheck.go` + `cmd/server/main.go:30` đọc `os.Args[1] == "healthcheck"`, và `docker-compose.prod.yml` khai báo healthcheck bên dưới. `deploy/up.sh` đọc `docker inspect -f '{{.State.Health.Status}}'` để quyết định rollback.
-
-Rollback tự động ở CD chỉ chạy được nếu `api` khai báo healthcheck trong compose:
-
-```yaml
-api:
-  healthcheck:
-    test: ["CMD", "/server", "healthcheck"] # binary tự gọi /healthz nội bộ
-    interval: 10s
-    timeout: 3s
-    retries: 5
+# devforge-fe
+cp .env.example .env
+npm ci && npm run dev
 ```
 
-Image prod là **distroless (không shell/wget)** → không dùng được `CMD-SHELL "wget ..."`. Vì thế healthcheck là subcommand `/server healthcheck` của chính binary, tự probe `/readyz` qua loopback trong container.
+- **Ports come in pairs.** Both `.env.example` files say 8080. A working copy may
+  run 8888 in both `.env` files instead. Either works as long as
+  `devforge-be/.env` `PORT` and `devforge-fe/.env` `VITE_API_URL` match.
+- **Labs need the four local images.** If `docker images 'devforge/*'` is empty,
+  starting any container lab fails. Run `make lab-images` (it is part of
+  `make migrate`, not `make up`).
+- Every port in `docker-compose.yml` is bound to `127.0.0.1`. Keep it that way
+  (§9.9 #2). Reach them from another machine through an SSH tunnel.
 
-Với `docker compose up -d --wait --wait-timeout 120` thì compose chính là thứ chờ healthcheck này, nên `deploy/up.sh` không cần vòng lặp `docker inspect` tự viết nữa (§13.2).
+Make targets in `devforge-be`:
 
-### Domain & routing — một origin, route theo path
+| Target                     | Does                                                                         |
+| -------------------------- | ---------------------------------------------------------------------------- |
+| `up` / `down`              | start / stop the dev compose stack                                           |
+| `migrate`                  | `up` + migrations + demo seed + lab images — local only, the seed adds demo accounts |
+| `migrate-schema`           | migrations only, no seed, no images                                          |
+| `migrate-down`             | roll back one migration (local only — never during a prod incident, §8 "Migrations") |
+| `migrate-new name=x`       | create the next numbered migration pair                                      |
+| `admin email= password=`   | create or promote an admin via `go run` — local only, see §13.5 for prod     |
+| `lab-images`               | build `devforge/{linux,git,docker,net}:latest`                               |
+| `test` / `cover`           | `go test ./...` / coverage as CI measures it (floor 16.5%)                   |
+| `check-seed`               | run every seed `check_script` inside a real lab container                    |
+| `check-sim`                | grade every simulated task: wrong pipeline must fail, right one must pass    |
+| `check-edge`               | 14 route checks against the real `deploy/nginx/devforge.conf` (needs Docker) |
+| `check-release-guard`      | pin which tag names may become a release                                     |
+| `release v=vX.Y.Z`         | tag both repos and push — §8 "CI/CD"                                         |
+
+### Environment variables
+
+Source of truth for values: `.env.example` (local) and `.env.prod.example`
+(production, with a `STAGING` block at the bottom). Code defaults live in
+`internal/config/config.go`. **Secret** = only ever in the `.env` on the box.
+
+| Variable                                                  | Local                                   | Production                                                        | Notes                                                                                           |
+| --------------------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `DOMAIN`                                                  | —                                       | `example.com`                                                     | Read only by `deploy/up.sh`, which refuses to run without it                                    |
+| `IMAGE_REPO`                                              | —                                       | `ghcr.io/<owner>`, **lowercase**                                  | GHCR rejects uppercase                                                                          |
+| `IMAGE_TAG`                                               | —                                       | **not in `.env`** — `develop` on dev, `vX.Y.Z` in production      | `up.sh` writes the healthy one to `.image-tag`, the commits to `.deployed`                      |
+| `APP_ENV` / `PORT` / `LOG_LEVEL`                          | `development` / `8080` / `debug`        | `production` / `8080` / `info`                                    |                                                                                                 |
+| `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_NAME`             | `localhost` / `5432` / `devforge` ×2    | `postgres` / `5432` / `devforge` ×2                               |                                                                                                 |
+| `DB_PASSWORD`                                             | fake                                    | `openssl rand -base64 24`                                         | **Secret**                                                                                      |
+| `DATABASE_URL`                                            | spelled out                             | interpolated from `DB_*`                                          | Used by `migrate` and the Makefile only, not by the Go binary. `sslmode=disable` — see below     |
+| `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB`              | `localhost:6379` / empty / `0`          | `redis:6379` / empty / `0`                                        | Refresh sessions only; losing Redis signs everyone out, nothing else                            |
+| `JWT_SECRET`                                              | fake                                    | `openssl rand -base64 32`                                         | **Secret.** Changing it signs everyone out                                                      |
+| `ACCESS_TTL` / `REFRESH_TTL`                              | `15m` / `168h`                          | same                                                              |                                                                                                 |
+| `COOKIE_DOMAIN`                                           | empty                                   | **empty**                                                         | Host-only cookie; correct for one origin                                                        |
+| `CORS_ORIGINS`                                            | `http://localhost:5173`                 | `https://<domain>`                                                | Also the WebSocket `Origin` allow-list (terminal, chat). Wrong → terminal never connects         |
+| `FRONTEND_URL`                                            | `http://localhost:5173`                 | `https://<domain>`                                                |                                                                                                 |
+| `PUBLIC_URL`                                              | `http://localhost:8080`                 | `https://<domain>` — **no `/api`**                                | Code appends `/uploads/…` and `/api/shared-drills/…` itself                                     |
+| `UPLOAD_DIR`                                              | `./uploads`                             | `/uploads`                                                        | Named volume `uploads` in `docker-compose.prod.yml`; distroless nonroot cannot write elsewhere  |
+| `TRUSTED_PROXIES`                                         | `127.0.0.1,::1`                         | `127.0.0.1,::1,172.16.0.0/12`                                     | **Mandatory.** Half of §9.5; the other half is in nginx. Never `0.0.0.0/0`                      |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`               | `.env`                                  | `.env` on the box                                                 | **Secret**                                                                                      |
+| `GOOGLE_REDIRECT_URL`                                     | `http://localhost:8080/api/auth/google/callback` | `https://<domain>/api/auth/google/callback`              | Must match Google Console character for character                                               |
+| `SMTP_HOST` / `SMTP_PORT`                                 | Mailpit `localhost` / `1025`            | Resend or Brevo / `587`                                           | **Fails silently** — see below                                                                  |
+| `SMTP_USER` / `SMTP_PASSWORD`                             | empty                                   | required                                                          | **Secret**                                                                                      |
+| `MAIL_FROM`                                               | `no-reply@devforge.local`               | `no-reply@<domain>`                                               |                                                                                                 |
+| `VERIFY_CODE_TTL` / `RESET_TOKEN_TTL` / `RESEND_COOLDOWN` | `10m` / `1h` / `60s`                    | same                                                              |                                                                                                 |
+| `LAB_DOCKER_HOST`                                         | `tcp://127.0.0.1:2375`                  | `tcp://docker-proxy:2375` (forced by `docker-compose.prod.yml`)   | Never `DOCKER_HOST` — the docker CLI reads that name too                                        |
+| `LAB_SESSION_TTL`                                         | `60m`                                   | `20m`                                                             | §9.4                                                                                            |
+| `MAX_CONTAINERS`                                          | `40` (code default, not in `.env.example`) | `16`                                                           | Seat cap **per database**, §9.4                                                                 |
+| `PUBLIC_RATE_LIMIT`                                       | `60`                                    | `60`                                                              | Per client IP per minute on public share routes — only per-IP if §9.5 is right                  |
+| `OPENROUTER_API_KEY`                                      | empty                                   | **empty on first deploy**                                         | **Secret.** Empty key or model → that one endpoint answers 503, server runs normally (§9.6)    |
+| `OPENROUTER_MODEL`                                        | `anthropic/claude-opus-5`               | `anthropic/claude-haiku-4-5`                                      | Must support `response_format`                                                                  |
+| `AI_DAILY_LIMIT`                                          | `10`                                    | `3`                                                               | Hard cap per user per UTC day                                                                   |
+| `R2_BUCKET` / `R2_ENDPOINT` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | —                       | required                                                          | **Secret.** `backup.sh` exits loudly until filled                                               |
+| `COMPOSE_PROFILES`                                        | `dev`                                   | **absent**                                                        | Gates Mailpit. A mail catcher on a public box is a mailbox anyone can read                     |
+| `VITE_API_URL` (FE, build time)                           | `http://localhost:8080`                 | **empty, pinned** by `ENV VITE_API_URL=""` in `devforge-fe/Dockerfile` | Not a per-environment variable — §9.1.1                                                  |
+| `VITE_UMAMI_SRC` / `VITE_UMAMI_ID` (FE)                   | empty                                   | empty                                                             | Analytics off until set                                                                         |
+
+⚠️ **`sslmode=disable` is correct in production, and only there.** The
+`postgres:16-alpine` container has no TLS configured; `require` kills `migrate`
+on the first deploy with `SSL is not enabled on the server`. What makes it safe
+is scope: the connection never leaves the compose bridge, and Postgres publishes
+only on `127.0.0.1`.
+
+⚠️ **SMTP is where production breaks silently.** Locally Mailpit swallows every
+mail, so nobody notices it missing. In production, verification codes and
+password resets are the only mail sent; without `SMTP_HOST` new users never get
+a code and nothing errors on the server.
+
+⚠️ **The production `.env` exists in exactly one place.** CD does not ship it
+(Actions holds only `SSH_HOST`, `SSH_USER`, `SSH_KEY`, and optionally
+`SONAR_TOKEN`), and `backup.sh` dumps the database, not config. Keep a copy in a
+password manager. Rebuilding the box without it means new keys everywhere, and
+everyone is signed out with the old `JWT_SECRET`.
+
+### Domain & routing
+
+One origin, routed by path. `deploy/nginx/devforge.conf` implements this, and
+`make check-edge` asks the real config 14 questions to prove it.
 
 ```
-https://<domain>/            → SPA (image devforge-web) và API, cùng một biên
+https://<domain>/
     /api/*      REST
-    /ws/*       WebSocket (wss)
-    /uploads/*  ảnh bìa + avatar — KHÔNG nằm trong /api
-    /r/:id · /war-room/day/:date  → chỉ bot: rewrite sang endpoint preview
+    /ws/*       WebSocket (wss) — proxy_buffering off, read timeout 3600s
+    /uploads/*  cover images + avatars — NOT under /api
+    /r/:id · /war-room/day/:date   → crawlers only: rewritten to the preview endpoint
     /healthz    /readyz
-    còn lại     → SPA
+    everything else → SPA (image devforge-web)
 ```
 
-Đây đúng là thứ `deploy/nginx/devforge.conf` đang làm, và `make check-edge`
-dựng chính file đó trước hai upstream giả rồi hỏi từng đường dẫn — **cả năm**
-route, không phải chỉ `location /`. Vì sao một origin chứ không phải hai:
-§9.1.1.
+- **`/uploads/*` needs its own route.** `cmd/server/router.go` mounts
+  `r.Static("/uploads", …)` on the root router, outside `/api`. Without the
+  route every image gets `index.html` with **200** — a broken image, not a 404
+  anyone can grep for.
+- **The crawler blocks must stay ahead of the catch-all.** Facebook, Zalo and
+  Slack run no JavaScript, so shared links render blank without them. nginx
+  tries regex locations in written order and they always beat the `location /`
+  prefix. Keep both regexes (`^[A-Za-z0-9_-]+$` for ids, `^\d{4}-\d{2}-\d{2}$`
+  for dates) — they keep junk out of an image-generating endpoint. The date
+  regex is quoted because nginx reads `{4}` as a block opener.
+- **Upstreams go through variables + `resolver 127.0.0.11`.** nginx otherwise
+  resolves `api` once at start, and the new `api` container after a deploy gets
+  a new bridge address → 502.
+- `COOKIE_DOMAIN` stays empty: same origin, host-only cookie, `SameSite=Lax`
+  never comes into play.
+- `client_max_body_size 4m` caps uploads at the edge.
 
-`COOKIE_DOMAIN` để trống — cùng origin thì cookie host-only là đúng, và
-`SameSite=Lax` không bao giờ thành vấn đề vì không có bên thứ hai nào.
+When the domain is chosen:
 
-⚠️ **`/uploads/*` phải có route riêng.** `cmd/server/router.go:32` gắn
-`r.Static("/uploads", …)` lên router gốc, **ngoài** group `/api`, và
-`internal/upload/image.go:100` dựng URL bằng `PUBLIC_URL + "/uploads/" + name`.
-Thiếu route đó thì mọi ảnh nhận về `index.html` kèm **200** — ảnh vỡ, không phải
-404 để mà grep. `UPLOAD_DIR` cũng phải là volume, nếu không mỗi `up -d` là mất
-sạch ảnh đã upload.
+- `FRONTEND_URL`, `PUBLIC_URL` and `CORS_ORIGINS` are all `https://<domain>`.
+- Google Console redirect URI: `https://<domain>/api/auth/google/callback`.
+- DNS: one `A` record for `<domain>`, orange cloud. There is no `api.` record.
 
-⚠️ **Khối bot phải nằm TRƯỚC route bắt-tất-cả.** Facebook/Zalo/Slack không chạy
-JavaScript nên link chia sẻ hiện ô trắng; khối `@crawler` rewrite `/r/:id` và
-`/war-room/day/:date` sang endpoint preview. Giữ nguyên hai biểu thức chính quy
-(`^[A-Za-z0-9_-]+$` cho id, `^\d{4}-\d{2}-\d{2}$` cho ngày) — chúng ở đó để
-không đẩy rác vào một endpoint sinh ảnh. nginx thử location regex theo đúng thứ tự viết, và
-regex luôn thắng prefix match `location /` — đó là thứ giữ hai khối này đứng
-trước route bắt-tất-cả.
+The price of one domain: FE and API share one way in, so one bad edge config
+takes both down.
 
-Khi chốt domain:
+### Healthcheck and readiness
 
-- `FRONTEND_URL` và `PUBLIC_URL` **trùng nhau**, cả hai là `https://<domain>`.
-- Google Console: redirect `https://<domain>/api/auth/google/callback`, khớp từng ký tự. Một cái là đủ — URI thứ hai chỉ cần khi dựng staging, đang hoãn.
-- DNS: một bản ghi `A` cho `<domain>`, mây cam (§9.5). Không có `api.` nào để tạo.
-- `VITE_API_URL` không phải biến của môi trường nào — ghim rỗng trong `devforge-fe/Dockerfile`.
+| Endpoint                         | Means                                                  | Use for                              |
+| -------------------------------- | ------------------------------------------------------ | ------------------------------------ |
+| `/healthz`                       | process is alive, always 200                           | nothing that decides anything        |
+| `/readyz`                        | pings the database (2 s timeout), 503 when it cannot   | rollback condition, uptime monitor   |
+| `http://127.0.0.1:81/nginx-alive` (inside nginx) | the edge is serving                    | nginx container healthcheck          |
 
-Cái phải trả cho một domain: FE và API chung một đường vào, tức chung một trần
-băng thông, và một lần cấu hình biên sai làm sập cả hai.
+The `api` image is distroless (no shell, no `wget`), so its compose healthcheck
+is the binary probing itself: `["CMD", "/server", "healthcheck"]` →
+`cmd/server/healthcheck.go` → `GET /readyz` over loopback. Interval 10 s,
+timeout 5 s, 5 retries, 20 s start period. `docker compose up -d --wait
+--wait-timeout 120` in `up.sh` blocks on exactly this, which is what makes
+automatic rollback trustworthy. Without the nginx healthcheck, `--wait` would
+count a crash-looping edge as running.
 
-### Migration tương thích ngược
+### Migrations
 
-Code mới phải chạy được với schema cũ. Đổi tên cột `user_name` → `username` làm 3 bước qua 3 lần deploy:
-
-```
-Deploy 1:  ADD COLUMN username; backfill; code đọc user_name, ghi CẢ HAI
-Deploy 2:  code đọc username, ghi CẢ HAI
-Deploy 3:  DROP COLUMN user_name; code chỉ dùng username
-```
-
-### CI/CD — hai repo, gặp nhau ở registry
-
-**Hai nhánh dài: `develop` tích hợp, `master` production.**
-
-Trước đây chỗ này chỉ có master, với lập luận: thêm `develop` là rước một cái
-bẫy — merge `develop → master` đẻ merge commit, SHA đổi, image mang SHA cũ
-không còn khớp commit được tag, nên phải ép `--ff-only` vĩnh viễn để chống một
-vấn đề tự mình tạo ra.
-
-Lập luận đó chỉ đúng nếu có thứ gì đó build theo nhánh. Không còn nữa. **Chỉ
-tag mới build**, nên không nhánh nào sinh ra image, và không có SHA nào để
-lệch. `--ff-only` là thứ không cần tới.
+Rollback moves the image back, never the schema. Therefore **every migration
+must be backward compatible**: the previous binary has to run against the new
+schema. Renaming `user_name` → `username` takes three releases:
 
 ```
-pull_request                → chỉ kiểm, không build gì
-push develop                → chỉ kiểm, không build gì
-push master                 → chỉ kiểm, không build gì
-push tag v* (CẢ HAI repo)   → kiểm → build → quét → push :v1.2.0 → deploy PROD
+Release 1:  ADD COLUMN username; backfill; code reads user_name, writes BOTH
+Release 2:  code reads username, writes BOTH
+Release 3:  DROP COLUMN user_name; code uses username only
 ```
 
-Ba dòng đầu giống hệt nhau, và đó là chủ ý: một nhánh không phải là một bản
-phát hành. Không gì chạm vào registry hay vào máy cho tới khi có người đặt tên
-một phiên bản.
+Rules `up.sh` relies on:
 
-Cái giá là thật và phải nói ra: image lên production **chưa từng chạy ở đâu
-trước đó**. Base image ghi theo dòng minor (`golang:1.26-alpine`,
-`nginx:1.31-alpine`) nên một bản build lúc tag có thể kéo lớp nền mà chưa gì
-test qua. Trivy vẫn chặn trước khi push, nên nó hiện ra thành **bản phát hành
-đỏ, không phải bản đã ship**. Đó là hướng hỏng chấp nhận được, không phải là
-hỏng không tồn tại.
+1. Migrations run **before** the new `api` starts (`migrate/migrate:v4.18.1` on
+   the compose network).
+2. The rollback path **does not run `migrate` again** — the failed release may
+   have applied a migration whose file the old checkout does not have, and
+   `migrate up` would die before the old image is back.
+3. **No down migration during an incident.** That is how a rollback becomes data
+   loss.
 
-Tag chỉ cắt trên master, và không dựa vào trí nhớ ai cả: job `images` chạy
-`git merge-base --is-ancestor HEAD origin/master` trước khi build, nên tag cắt
-từ nhánh phụ bị từ chối ngay cả khi commit đó xanh.
+### Branching
 
-Tên tag đi vào tên docker image và, ở job `deploy`, đi vào một câu lệnh chạy
-qua ssh trên máy production. Bộ lọc `tags: ["v*"]` lọc tên chứ không lọc ký tự
-shell — `v1;rm -rf /` khớp `v*` rất vừa. Nên có `scripts/release-guard.sh`, gọi
-ở cả hai job để hai chỗ không thể bất đồng về việc một cái tên phát hành được
-phép trông như thế nào, và `make check-release-guard` giữ nó trung thực.
+Long-lived branches, in both repos:
 
-Repo `devforge-be`:
+| Branch    | Role                                                    | Receives                          |
+| --------- | ------------------------------------------------------- | --------------------------------- |
+| `develop` | default branch; integration; deploys to dev on every push | PRs from `feat/*` and `fix/*`, Dependabot |
+| `master`  | what releases are cut from; never deployed by itself    | PR `develop → master` before a release |
 
-```
-job be      → gofmt -l | (! grep .)  →  golangci-lint  →  go build
-              →  go test -coverprofile  →  chặn nếu tụt dưới sàn 16.5%
-job secrets → gitleaks (fetch-depth: 0, cần quyền pull-requests: read)
-              →  trivy fs: go.sum
+Short-lived branches, always from `develop` and back into it by PR:
 
-chỉ khi push tag `v*` và cả hai xanh:
-  job images  → release-guard.sh <tag>      ← tên tag: lọc trước khi build, không phải sau
-                →  merge-base --is-ancestor HEAD origin/master  ← tag phải trên master
-                →  docker build --target prod --load   ← --load, CHƯA push
-                →  trivy image devforge-api
-                →  build 4 lab image  →  trivy image từng cái
-                →  quét xong mới push :v1.2.0
-                   ← đỏ thì registry không có gì
-                   ← một cái tên duy nhất, và nó lùi về được
-  job deploy  → release-guard.sh <tag>      ← cùng script, hai chỗ không thể lệch nhau
-                →  chờ tối đa 5' cho ghcr devforge-web:v1.2.0 xuất hiện
-                     thiếu → dừng, CHƯA chạm vào box      ← cổng xuyên repo
-                →  ssh: git fetch --tags --force
-                        git checkout --force --detach <tag>   (chỉ clone be)
-                        IMAGE_TAG=<tag> ./deploy/up.sh
-                           compose pull api web
-                           pull 4 lab image → docker tag về devforge/<tên>:latest
-                           up -d --wait postgres redis
-                           migrate up                   (tương thích ngược)
-                           up -d --wait --wait-timeout 120
-                           xanh → ghi .image-tag
-                        đỏ → IMAGE_TAG=$(cat .image-tag) up -d --wait  ← KHÔNG migrate lại
-```
+| Prefix        | For                  | Example                 |
+| ------------- | -------------------- | ----------------------- |
+| `feat/<name>` | a feature            | `feat/lab-reconnect`    |
+| `fix/<name>`  | a bug, any severity  | `fix/upload-200-broken` |
 
-Repo `devforge-fe`, cùng hình dạng, không có job deploy:
+- **No `hotfix/*` branches** (decided 2026-10-07, §13.11). Every bug goes
+  through `develop` and the next release.
+- **Merge `develop → master` with a merge commit**, not squash or rebase:
+  `make release` tags the commits dev is serving, and those must stay
+  ancestors of `master`.
+- **Never merge unfinished work into `develop`.** Every release ships all of
+  `develop`; half-done work stays on its branch.
+- A change touching both repos is two PRs, merged into both `develop` branches;
+  each repo deploys its own push to dev.
+
+### CI/CD — two repos, meeting at the registry
+
+**Branches: `develop` integrates, `master` is what releases are cut from.** Both
+repos' default branch is `develop`, so new PRs and Dependabot target it.
+
+**Build once, promote.** Images are built exactly once — on a push to
+`develop` — scanned, and run on dev. A release does not build: it gives the
+image dev ran a version name, so production serves the same bits that were
+tested.
 
 ```
-job fe      → oxlint  →  tsc --noEmit  →  npm run check (8 file assert)  →  build
-job secrets → gitleaks  →  trivy fs (package-lock.json)
-
-push develop / master → chỉ job fe + secrets + sonar, không build gì
-push tag v*           → job image → tag phải trên master
-                                  →  build --load → trivy image
-                                  →  push devforge-web:v1.2.0
+pull_request          → check only
+push develop          → check → build + scan ONCE → dev-<sha> + :develop → deploy dev
+push master           → check only
+make release v=vX.Y.Z → tags the commits dev is serving, in BOTH repos
+push tag v* (BOTH)    → check → re-scan dev-<sha> → copy to :vX.Y.Z → approval → deploy prod
 ```
 
-⚠️ **Image lab được pull rồi `docker tag` về `devforge/<tên>:latest` ngay trên máy.**
-Bảng `lab_images` giữ đúng tên đó (`scripts/seed.sql`) và API gọi Docker API theo
-tên trong bảng. Đổi tên trong DB là một migration; retag tại chỗ là một dòng, tức
-thì, và giữ được nguyên tắc *quét cái gì thì ship cái đó*.
+How a commit is followed from dev to production:
 
-**Bốn điều kiện, không cái nào tuỳ chọn:**
+1. A push to `develop` builds `devforge-*:dev-<full sha>` (never moves) and
+   `:develop` (moves), with the label `org.opencontainers.image.revision=<sha>`.
+2. Dev deploys `IMAGE_TAG=develop`. After the stack is healthy, `up.sh` writes
+   `.deployed` on the box: `be=<sha>` and `fe=<sha>`, read from the `api` and
+   `web` image labels. It deletes the file before every deploy, so a broken
+   deploy leaves nothing a release could name.
+3. `make release v=vX.Y.Z` reads `.deployed` over ssh, refuses unless both
+   commits are on `master`, and tags **those commits** — not master's HEAD — in
+   both repos (`scripts/release.sh`, pinned by `make check-release`).
+4. Each repo's `promote` job pulls `dev-<sha>` for its tagged commit, re-scans it
+   (CVEs published since the dev build count), and pushes the same image as
+   `:vX.Y.Z`. A commit that never built on `develop` has no `dev-<sha>` and is
+   refused.
+5. be's `deploy` waits for `devforge-web:vX.Y.Z`, waits for approval in the
+   `production` environment, then ssh → `up.sh`.
 
-1. **`/readyz` phải trả đỏ khi API chưa nối được DB** — nếu không thì bước kiểm luôn xanh và rollback không bao giờ bắn. Đã có: `cmd/server/router.go:74` ping database timeout 2 giây, trả `503` khi hỏng. `/healthz` luôn `200`, chỉ nói tiến trình còn sống — **đừng dùng nó làm điều kiện rollback.**
-2. **Migration chạy trước `up -d`, và phải tương thích ngược.** Rollback chỉ lùi image, không lùi schema.
-3. **Rollback không chạy lại `migrate`.** Bản deploy hỏng có thể đã apply xong một migration; `migrate up` với `migrations/` cũ sẽ chết vì version đã apply không còn file — và chết *trước* khi kịp đưa image cũ trở lại.
-4. **Secret**: `SSH_HOST`/`SSH_USER`/`SSH_KEY` (prod), chỉ ở repo be. `STAGING_SSH_*` không còn được dùng — job `deploy-staging` đã bị bỏ cùng lúc với việc master thôi build (§8). Repo fe không cần secret nào — `GITHUB_TOKEN` mặc định đủ `packages: write` cho GHCR cùng owner.
+`devforge-be` (`.github/workflows/ci.yml`):
 
-**Chỉ một đường vào box, và nó nằm ở repo be.** `concurrency` của GitHub Actions
-tính theo từng repo nên không xếp hàng hai repo với nhau được; job deploy thứ hai
-là một đường đua, dù có cổng tag hay không.
+```
+be          gofmt -l → golangci-lint v2.12.2 → go build → go test -coverprofile
+            → fail if coverage < 16.5% (a ratchet: raise it, never lower it)
+sonar       needs be; skips itself without SONAR_TOKEN
+secrets     gitleaks → trivy fs (go.sum) → trivy on the nginx tag in docker-compose.prod.yml
 
-Việc của repo fe trong một bản phát hành đúng một thứ: build và đẩy image của
-chính nó lên `:v1.2.0`. Job `deploy` bên be **chờ** image đó, tối đa 5 phút, rồi
-mới ssh. `needs:` không bắc qua hai repo được, nhưng registry thì bắc được — fe
-chưa đẩy thì image không tồn tại và deploy dừng trước khi chạm vào box. Năm phút
-là con số cũ, từ thời fe chỉ phải copy một digest; giờ fe phải build thật, nên
-nếu bản phát hành nào chạm trần thì chỗ cần nâng là đây.
+push develop only:
+images-dev  build api + 4 labs --load (labelled) → trivy each → push dev-<sha> + :develop
+deploy-dev  env `development`; skips without SSH_HOST
+            ssh: checkout --detach <this sha>; IMAGE_TAG=develop DEPLOY_WAIT=900 up.sh
 
-⚠️ **`flock` vẫn cần, và đặt trên thư mục checkout chứ không phải file khoá.**
-`concurrency` không biết gì về **người** đang ssh vào box, mà §13.4 bảo chạy
-`up.sh` bằng tay. `exec 9<"$PWD"` rồi `flock -n 9`: một file dưới `/run/lock` sẽ
-do người deploy đầu tiên tạo, một lần `sudo ./deploy/up.sh` để lại file
-`root:root 0644` và mọi lần CD sau đó chết ở `Permission denied`.
+tag v* only:
+promote     release-guard.sh → tag must be on master → pull dev-<sha> (missing → refuse)
+            → trivy api + 4 labs → push the same image as :vX.Y.Z
+deploy      env `production` (required reviewer); wait ≤ 5 min for devforge-web:<tag>
+            → skip without SSH_HOST → release-guard.sh
+            → ssh (timeout 1800, ConnectTimeout=10, BatchMode=yes):
+                git fetch --tags --force && git checkout --force --detach <tag>
+                IMAGE_TAG=<tag> ./deploy/up.sh
+```
 
-**Merge vào `master` không build gì và không deploy đi đâu.** Prod chỉ ra bản mới
-khi có người gắn tag (`make release v=v1.2.0`). Hệ quả:
+`devforge-fe`, same shape:
 
-- `master` là nhánh *deploy được*, không phải nhánh *đã deploy*. Cái đang chạy trên prod là tag gần nhất, không phải HEAD của `master`.
-- `images` đòi `merge-base --is-ancestor` trước khi build, nên tag cắt từ nhánh phụ bị từ chối kể cả khi commit đó xanh — và bị từ chối *trước* khi tốn mười phút build.
-- Chỉ còn **một** clone trên mỗi box: repo fe là image, không được clone ở đó nữa. Bẫy detached-HEAD của lỗi 13.0#3 biến mất theo — rollback đổi `IMAGE_TAG`, không `git checkout`.
-- Sau rollback, clone be vẫn nằm ở tag hỏng. Không sao — lần sau `checkout --force` chứ không `pull`. Nhưng file nginx và `migrations/` trên đĩa là bản mới trong khi image là bản cũ, nên cả hai bắt buộc tương thích ngược.
+```
+fe          oxlint → tsc → npm run check (8 assert files) → build
+sonar       skips itself without SONAR_TOKEN
+secrets     gitleaks → trivy fs (package-lock.json)
+image-dev   push develop: build --load (labelled) → trivy → push dev-<sha> + :develop
+deploy-dev  push develop, env `development`: ssh, be clone → origin/develop, same up.sh call
+promote     tag v*: guard → tag on master → pull dev-<sha> → trivy → push :vX.Y.Z
+            (no production deploy here — only be's deploy job waits for both repos)
+```
 
-Tên tag đi thẳng vào một lệnh shell qua ssh, nên `ci.yml` chặn trước khi gửi: chỉ
-nhận `v[0-9]…` gồm `[A-Za-z0-9._-]`. Bộ lọc `tags: ["v*"]` của GitHub lọc tên,
-không lọc ký tự shell.
+What `deploy/up.sh` does on either box:
 
-**Một release = một tag, gắn lên CẢ HAI repo.** Hai không gian tag độc lập:
-`v1.2.0` bên be trỏ commit của be, bên fe trỏ commit của fe, **chỉ cái tên trùng
-nhau**. Chỗ hai bên gặp nhau là GHCR, không phải git.
+```
+flock on the checkout dir — refuse a concurrent deploy, or wait DEPLOY_WAIT seconds (dev)
+→ source .env; require DOMAIN, DATABASE_URL, IMAGE_REPO, IMAGE_TAG
+→ delete .deployed
+→ pull api + web; pull 4 lab images and `docker tag` them to devforge/<name>:latest
+→ up -d --wait postgres redis → migrate up
+→ up -d --wait --wait-timeout 120 (whole stack)
+   healthy   → write .image-tag and .deployed, prune dangling images, exit 0
+   unhealthy → print api logs, then
+               no .image-tag (first deploy)        → leave the stack, exit 1
+               previous tag == this tag (:develop) → nothing to roll back to, exit 1
+               otherwise → pull + start the previous tag WITHOUT migrating, exit 1
+```
+
+Rules:
+
+- **One release = one version name on both repos, tagging the commits dev
+  serves.** `up.sh` pulls `api`, `web` and 4 lab images with one `IMAGE_TAG`, and
+  only a name both repos share can address all six. `make release` writes both
+  tags; never tag by hand.
+- **Merge `develop` into `master` before releasing.** The dev commits must be
+  ancestors of `master` (a merge commit is fine — the tag goes on the dev commit,
+  not on the merge).
+- **Never move a released tag.** Git allows `-f` and GHCR allows overwrite; doing
+  either makes the release unreproducible and rollback a guess. Cut the next
+  patch version.
+- **Tag names reach a remote shell.** `tags: ["v*"]` filters names, not shell
+  metacharacters. `scripts/release-guard.sh` accepts only `v[0-9]…` spelled with
+  `[A-Za-z0-9._-]`; it runs in `make release`, `promote` and `deploy`, and
+  `make check-release-guard` pins it.
+- **Dev rolls forward only.** `:develop` moves, so a failed dev deploy is fixed
+  by the next push. Production keeps tag rollback.
+- **Two repos deploy to dev, one deploys to production.** Dev has no cross-repo
+  gate, so each repo deploys its own pushes and the box serialises them
+  (`DEPLOY_WAIT`). Production needs both images, so only be's job deploys it.
+- **Lab images are retagged on the box** to `devforge/<name>:latest`, the name
+  the `lab_images` table stores. Renaming in the database would be a migration.
+- **The flock is on the directory, not a lock file.** A file under `/run/lock`
+  created by one `sudo ./deploy/up.sh` stays root-owned and breaks every later
+  deploy with `Permission denied`.
+- **Never add `git clean` to the deploy path.** The checkout holds the two
+  untracked files with no copy anywhere: `.env` and `deploy/nginx/certs/*`.
+
+The cost of promoting: nothing reaches production that is not running on dev
+right now, so a release needs dev healthy and `develop` frozen while it is
+tested (§13.11). A hotfix goes through `develop` like everything else.
+
+### Security scanning and code quality
+
+| Gate            | Where                          | Fails on                                                        |
+| --------------- | ------------------------------ | --------------------------------------------------------------- |
+| gitleaks        | `secrets` job, both repos      | any secret in history (`.gitleaks.toml` for allow-lists)        |
+| Trivy fs        | `secrets` job, both repos      | fixable HIGH/CRITICAL in `go.sum` / `package-lock.json`         |
+| Trivy edge      | `secrets` job, be              | fixable HIGH/CRITICAL in the nginx image production pulls       |
+| Trivy image     | `images-dev` / `image-dev`; re-run in `promote` | same, on api, web and the 4 lab images — **before** push, and again before a release |
+| golangci-lint   | `be` job                       | `.golangci.yml` (v2, standard + bodyclose, rowserrcheck, sqlclosecheck, errorlint); replaces `go vet` |
+| Coverage floor  | `be` job                       | total < 16.5%                                                   |
+| SonarQube Cloud | `sonar` job, both repos        | Quality Gate red (`sonar.qualitygate.wait=true`) — skipped until `SONAR_TOKEN` exists |
+
+Trivy flags everywhere: `--severity HIGH,CRITICAL --ignore-unfixed --exit-code 1`.
+`--ignore-unfixed` is not optional — without it CI goes red on CVEs nobody can
+patch, and someone deletes the job three weeks later.
+
+`.trivyignore` is empty on purpose. Every line added must carry `exp:<date>` and
+a reason; an ignore with no expiry disables the scanner for that CVE forever.
+
+The lab images are the real attack surface: they carry a shell and coreutils on
+purpose and strangers type into them. `devforge-api` is distroless nonroot.
+
+Dependabot (both repos, monthly) bumps Dockerfile base images and Actions. It
+does **not** read compose files — the Trivy edge scan is what watches the nginx
+pin in `docker-compose.prod.yml`.
+
+SonarQube is never self-hosted on the box: it is a JVM app needing 2–4 GB, and
+§9.4 says CPU is the ceiling and lab seats are the product. `sonar.projectKey`
+(`TuqL3_<repo>`) and `sonar.organization` (`tuql3`) in
+`sonar-project.properties` are guesses from Cloud's naming convention; check them
+against the UI on the first real run.
+
+### Dev environment
+
+A second, small Linode that runs exactly what is on `develop`, for testing
+before a release. Same compose files, same `up.sh`, same images as production;
+only its `.env` differs (the DEV block at the end of `.env.prod.example`).
+
+**Its own box, never a second stack on the production box:**
+
+- Both stacks want ports 80/443; sharing would mean pulling nginx out of the
+  compose files into a shared edge.
+- Unreleased code with access to the Docker daemon would run on the box that
+  holds production's data.
+- Dev's labs would take CPU from production's students (§9.4).
+- **The seat-count trap.** `internal/labs/adapter/repo/session.go` counts seats
+  from its own database
+  (`SELECT count(*) FROM lab_sessions WHERE status = 'running' AND container_id <> ''`),
+  not from the Docker daemon. Two stacks on one daemon each believe they have
+  room and together start twice `MAX_CONTAINERS`.
+
+**Keep it private.** A Cloudflare Access application on `dev.<domain>` lets only
+the team in (free up to 50 users). Strangers and search engines never see
+unreleased features or demo accounts. Side effect: link previews (`/r/:id` in
+Zalo/Slack) cannot be tested on dev — crawlers are kept out too.
+
+**Data is demo data.** Seed it once after the first deploy (§13.5). Never copy
+production's database to dev: it holds real users' personal data.
+
+**Mail goes to Mailpit** (`COMPOSE_PROFILES=dev`, `SMTP_HOST=mailpit`). Its
+inbox is bound to `127.0.0.1` on the box; read it through a tunnel, never by
+binding it to `0.0.0.0` — it holds verification codes and reset links:
 
 ```bash
-make release v=v1.2.0     # tag + push cả hai repo; từ chối nếu tag đã có hoặc cây bẩn
+ssh -L 8025:127.0.0.1:8025 devforge@<dev host>   # then open localhost:8025
 ```
 
-FE không đổi dòng nào vẫn phải tag: thiếu nó thì `devforge-web:v1.2.0` không tồn
-tại và deploy dừng. Số hiệu đi cùng nhau — be nhảy `v1.3.0` mà fe ở lại `v1.2.0`
-thì một cái tên chỉ hai thứ khác nhau tuỳ chỗ đọc.
-
-⚠️ **Không bao giờ dời một tag đã phát hành.** Git cho `-f`, GHCR cho ghi đè. Dời
-rồi thì `v1.2.0` hết tái lập được và rollback thành đoán. Sai thì cắt `v1.2.1`.
-
-Repo public thì Actions không giới hạn phút (§9.3). **Đặt package GHCR sang Public
-một lần trong UI**, nếu không box phải `docker login ghcr.io` bằng PAT.
-
-### Quét bảo mật và chất lượng mã
-
-Bốn thứ, và thứ tự giữa chúng không đổi được.
-
-**1. Artifact phải có trước — ✅ đã có.** Trước đây image build **trên box**, nên trong CI không tồn tại image nào để quét, và rollback build lại từ source tức là **khác bit** với thứ vừa test xanh. Cả hai đã đóng: sáu image (`devforge-api`, `devforge-web`, bốn `devforge-lab-*`) build một lần trong Actions, quét ở đó, đẩy lên GHCR dưới `:vX.Y.Z` — một cái tên, bất biến, và là đích để lùi về. Rollback kéo lại đúng digest đó chứ không build lại từ source.
-
-Không `:latest` trên prod. `latest` là thứ làm rollback hết tái lập được, và `docker-compose.prod.yml` đòi `IMAGE_TAG` bằng `${IMAGE_TAG:?}` chứ không đặt mặc định, đúng vì một mặc định là cách `latest` lên máy mà không ai chọn.
-
-**2. Trivy — bề mặt thật là lab image, không phải API image.**
-
-`devforge-api` chạy distroless nonroot: không shell, không package manager, không coreutils. Bốn image lab thì ngược lại, và `labs/linux/Dockerfile` nói thẳng: *"Whatever a student types runs in here, so it carries a shell and coreutils"*. Đó là image bạn phát cho người lạ gõ lệnh vào. Quét chúng trước.
-
-⚠️ **Không block `HIGH,CRITICAL` trần.** Alpine và distroless lúc nào cũng có CVE chưa ra bản vá; block trần là CI đỏ vì thứ không ai sửa được, và ba tuần sau có người tắt job. Cấu hình đúng:
-
-```
-trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 <image>
-trivy fs    --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 .
-```
-
-`.trivyignore` **bắt buộc ghi ngày hết hạn cho từng dòng**. Một dòng bỏ qua không có hạn là một dòng vĩnh viễn.
-
-Quét `fs` bắt `go.sum` và `package-lock.json` — lỗ hổng ở dependency gặp thường xuyên hơn ở base image.
-
-**3. Coverage — đang không đo ở bất kỳ đâu.** `go test ./...` chạy nhưng không có `-coverprofile`, không ở CI, không ở `Makefile`, không ở `lefthook.yml`. Đây là lỗ thật, và nó chặn luôn mọi Quality Gate: gate trên coverage của code mới cần một con số để gate.
-
-`golangci-lint` gộp sẵn `go vet` + `staticcheck` + `errcheck` + ~40 linter khác, nên nó **thay** dòng `go vet` chứ không thêm vào.
-
-**4. SonarQube — không tự dựng, không bàn thêm.** Nó là app JVM cần Postgres riêng, sàn 2–4 GB. Box là KVM2 2 vCPU và §9.4 đã chốt **CPU là trần**: ghế lab chính là sản phẩm. Dựng Sonar ở đó là lấy ghế học viên nuôi một cái dashboard.
-
-**SonarQube Cloud** (SaaS, 0₫ cho repo public) là đường duy nhất còn lại. **Job `sonar` đã có ở cả hai repo** (`SonarSource/sonarqube-scan-action@v8.2.2` + `sonar-project.properties`), và nó **tự bỏ qua khi chưa có `SONAR_TOKEN`** — cùng cách job `deploy` bỏ qua khi chưa có secret SSH. Còn lại đúng một việc tay: tạo tài khoản, bind repo, dán token.
-
-Cổng là thật chứ không phải báo cáo: `sonar.qualitygate.wait=true` trong `sonar-project.properties` làm job đỏ khi Quality Gate trượt. Không có dòng đó thì phân tích vẫn upload, dashboard vẫn đỏ, mà CI vẫn xanh.
-
-⚠️ `sonar.projectKey` và `sonar.organization` là **bắt buộc** với Cloud và không đặt được trong UI. Giá trị trong file đang là quy ước (`TuqL3_<repo>` / `tuql3`) — đối chiếu với UI ở lần chạy đầu.
-
-Cái SonarQube Cloud hơn `golangci-lint` + ngưỡng coverage là lịch sử, duplication và biểu đồ theo thời gian, cộng khái niệm **new code**: gate chấm phần diff chứ không chấm cả quá khứ tích tụ.
+**What dev catches and what it does not.** Same nginx config, Origin cert,
+orange cloud, `TRUSTED_PROXIES`, OAuth flow and migrations as production, so
+edge and proxy bugs show on dev first. What only production has — real
+traffic, real data, the SMTP provider, the AI key — still only shows there.
 
 ---
 
-### Staging — VPS thứ hai, HOÃN
+## 9. Production infrastructure
 
-> **Chưa dựng.** Quyết định ngày 2026-09-21: tạm thời không làm staging. Mục này
-> giữ nguyên vì lý do bên dưới không sai đi — nó chỉ chưa được trả. Cái đang gánh
-> rủi ro thay nó là production.
-
-Lý do cần nằm ngay trong §9.5: hai lỗi mô tả ở đó *"chỉ nổ sau khi deploy (dev FE
-gọi thẳng `:8080` nên không thấy)"*. Cùng loại với chúng, và cũng chỉ lộ ra sau
-khi lên máy thật:
-
-`TRUSTED_PROXIES` sau nginx **và** sau Cloudflare · `/uploads/*` với `PUBLIC_URL`
-· OAuth redirect URI thật · cert Origin + mây cam · khối bot đứng trước route
-bắt-tất-cả · migration ba bước tương thích ngược · và chính cái rollback theo tag.
-
-**Phương án đúng vẫn là một VPS thứ hai, loại nhỏ nhất** — và nó đang bị hoãn,
-nên cái giá ở gạch đầu dòng thứ nhất là cái đang phải trả: mọi thứ trong danh
-sách trên chỉ lộ ra ở prod. Gạch thứ hai vẫn là đường cụt kể cả khi muốn làm rẻ:
-dựng stack thứ hai trên cùng máy thì cắt thẳng vào ghế lab của prod (KVM2 có 2
-vCPU, §9.4 chốt trần là CPU) **và** dính bẫy đếm ghế dưới đây.
-
-⚠️ **Bẫy đếm ghế — lý do chính loại phương án cùng máy.**
-`internal/labs/adapter/repo/session.go:183` đếm ghế từ **database của chính nó**,
-không hỏi docker daemon:
-
-```sql
-SELECT count(*) FROM lab_sessions WHERE status = 'running' AND container_id <> ''
-```
-
-Hai stack chung một daemon nhưng hai database riêng → mỗi bên tin nó còn chỗ, và
-cùng nhau đẻ gấp đôi số container. `MAX_CONTAINERS` là trần trên *một cơ sở dữ
-liệu*, không phải trên *một cái máy*. Hai máy riêng thì không có cách nào ghép
-được. (Reaper không dính: `DueForReaping`, `session.go:252`, cũng quét theo
-`lab_sessions` của chính nó nên hai bên không dọn nhầm container của nhau.)
-
-Hai máy chạy **cùng một `docker-compose.yml` + `docker-compose.prod.yml` +
-`deploy/up.sh`**, khác đúng ở file `.env`. Không có `docker-compose.staging.yml`
-và không có `.env.staging.example` — hai template trăm dòng thì cái ít deploy hơn
-sẽ lệch, và nó luôn là staging. Các dòng phải đổi nằm ở cuối `.env.prod.example`.
-
-| | prod | staging |
-| --- | --- | --- |
-| Máy | KVM2, 2 vCPU / 8 GB | VPS nhỏ nhất, máy riêng |
-| Domain | `<domain>` | `staging.<domain>` — bản ghi A riêng, mây cam |
-| Postgres | volume riêng + `pg_dump` → R2 | volume riêng, **không backup** |
-| `MAX_CONTAINERS` | `12` | `4` |
-| `LAB_SESSION_TTL` | `20m` | `10m` |
-| `OPENROUTER_API_KEY` | (rỗng, xem §9.6) | rỗng — đừng đốt tiền AI ở staging |
-| Email | Resend / Brevo | Mailpit, `COMPOSE_PROFILES=dev` |
-| Trigger deploy | push tag `v*` | bằng tay: `IMAGE_TAG=v1.2.0 ./deploy/up.sh` |
-| Image | `:v1.2.0` | `:v1.2.0` — **cùng bit, cùng tên** |
-
-⚠️ **Staging không còn deploy tự động.** Job `deploy-staging` đã bị bỏ cùng lúc
-với việc nhánh thôi build: nó deploy tag trôi `:master`, mà giờ không ai đẩy tag
-đó nữa. Muốn diễn tập một bản phát hành thì ssh vào máy staging và chạy đúng câu
-lệnh production chạy, với cùng cái tag.
-
-Đổi lại được một thứ mà bản cũ không có: staging và production chạy **đúng một
-cái tên image**, nên "đã test ở staging" là câu đúng về bit chứ không chỉ về
-commit, và `.image-tag` trên staging trỏ vào một đích lùi được.
-
-⚠️ **Mailpit chỉ nghe `127.0.0.1`** (`docker-compose.yml`), vào hộp thư qua tunnel:
-
-```bash
-ssh -L 8025:127.0.0.1:8025 <user>@<staging host>    # rồi mở localhost:8025
-```
-
-Đừng đổi sang `0.0.0.0`. Mail catcher trên địa chỉ công khai là hộp thư ai cũng
-đọc được, mà trong đó có mã xác minh và link đặt lại mật khẩu.
-
-Thứ tự: **dựng prod cho xong trước.** Staging tồn tại để diễn tập một pipeline đã
-có; dựng nó trước là diễn tập cho thứ chưa viết. Hiện tại bước thứ hai đang hoãn
-vô thời hạn, nên prod là máy duy nhất.
-
----
-
-## 9. Hạ tầng production
-
-> **Đã đổi phương án.** Oracle Always Free / Caddy là thiết kế cũ và **chưa từng
-> dựng thật**. Quyết định hiện tại: **một VPS Hostinger (prod; staging hoãn),
-> nginx ở biên, FE và API cùng một origin**, image build ở Actions và pull từ
-> GHCR. Việc phải làm để chuyển sang nằm ở §13.
-
-### 9.0 Toàn cảnh
+### 9.0 Overview
 
 ```
-                 Cloudflare — DNS · TLS · WAF · DDoS
-                 cache CHỈ cho assets tĩnh, KHÔNG cho /api /ws /uploads (§9.5)
-                              │  HTTPS 443
-        ┌─────────────────────┴─────────────────────┐
-        ▼                                           ▼
-   <domain>                                  staging.<domain>
-   ┌────────────────────────────────────┐    ┌──────────────────────┐
-   │ VPS prod — 2 vCPU / 8 GB, SG       │    │ HOÃN — chưa dựng     │
-   │                                    │    │ cùng compose,        │
-   │  nginx  real_ip CF-Connecting-IP   │    │ khác .env, khi nào   │
-   │    │    /ws/: buffering off        │    │ cần thì §8 "Staging" │
-   │    ├──► web  (SPA tĩnh)            │    │                      │
-   │    └──► api  (Go, distroless)      │    │                      │
-   │           ├── postgres  loopback   │    └──────────────────────┘
-   │           ├── redis     loopback   │
-   │           └── docker-socket-proxy  │
-   │             CONTAINERS·POST·EXEC   │
-   │             └── lab container ×N   │
-   │                     --network=none │
-   │                     --cap-drop=ALL │
-   │                                    │
-   │  (sau này) Alloy → Grafana Cloud   │
-   └────────────────────────────────────┘
-         │                    │
-   pg_dump → R2         Sentry (chưa bật)
-   + diễn tập restore
-
-   NGOÀI hạ tầng:  UptimeRobot ping /readyz  ← không bao giờ đặt trên chính VPS (§9.9)
+                Cloudflare — DNS · TLS · WAF · DDoS
+                cache ONLY static assets, never /api /ws /uploads (§9.5)
+                             │ HTTPS 443, Full (strict)
+                             ▼
+   ┌──────────────── VPS prod — Linode 4 shared vCPU / 8 GB, Singapore ────────────────┐
+   │  nginx :80/:443  (only published ports)   real_ip from CF-Connecting-IP            │
+   │    ├──► web    SPA static files (nginx, image devforge-web)                         │
+   │    └──► api    Go, distroless nonroot, healthcheck → /readyz                        │
+   │           ├── postgres  volume pgdata,  127.0.0.1:5432                              │
+   │           ├── redis     no persistence, 127.0.0.1:6379                              │
+   │           ├── volume uploads → /uploads                                             │
+   │           └── docker-socket-proxy  CONTAINERS · POST · EXEC only                    │
+   │                 └── lab containers × MAX_CONTAINERS                                 │
+   │                     network none · cap-drop ALL · no-new-privileges · read-only     │
+   │                     rootfs · 512 MB · 0.5 CPU · 256 pids                            │
+   └────────────────────────────────────────────────────────────────────────────────────┘
+          │ cron 03:15                                   ▲
+          ▼                                              │ every 5 min
+   pg_dump → Cloudflare R2 (30-day lifecycle)     UptimeRobot / BetterStack → /readyz
+                                                  (outside the box, always — §9.9 #1)
 ```
 
-Luồng deploy:
+The dev box (§8 "Dev environment") is the same picture on a Linode 2 GB at
+`dev.<domain>`, behind Cloudflare Access, with Mailpit, demo data, 3 lab seats,
+no backups and no uptime monitor.
+
+Three things make this more than a generic "VPS + Compose" setup, and all three
+come from the product:
+
+1. **The app starts containers.** Hence `docker-socket-proxy`, the seat cap, the
+   reaper, and why no PaaS (Vercel, Render, Railway, Fly.io) can host the API.
+2. **No worker or queue.** The reaper is a goroutine; email is sent
+   synchronously. Do not add a worker service for work that does not exist.
+3. **FE on the same box, same origin** — a choice, §9.1.1.
+
+### 9.1 Server: Linode
+
+|          | The box we have                                   | Project needs |
+| -------- | ------------------------------------------------- | ------------- |
+| Provider | Linode (Akamai), Shared CPU plan                  | —             |
+| CPU      | 4 vCPU amd64 (AMD EPYC 7713), **shared**          | 2+            |
+| RAM      | 8 GB                                              | ~5 GB         |
+| Disk     | 160 GB                                            | ~60 GB        |
+| Region   | **`ap-south` — Singapore**                        | Singapore     |
+| OS       | **Ubuntu 24.04 LTS** (the box shipped with Arch — rebuild, §13.1) | Ubuntu LTS |
+
+- **Must be a real VPS with root and Docker** — the API drives Docker Engine.
+- **Singapore is a hard constraint.** The terminal is xterm.js over WebSocket;
+  every keystroke is a round trip. Singapore → Vietnam is 30–50 ms; EU/US is
+  250–300 ms and breaks the core feature.
+- **Ubuntu LTS, not a rolling distro.** `bootstrap.sh` is apt-based, relies on
+  `unattended-upgrades` for security patches, and refuses anything that is not
+  Ubuntu. A rolling release moves the kernel and Docker on every upgrade, which
+  is the wrong property for the one box that serves everything.
+- **Linode's Ubuntu image has no Docker.** `bootstrap.sh` installs Docker Engine
+  + the compose plugin from Docker's own apt repository (not Ubuntu's `docker.io`).
+- **Firewalls.** `ufw` (set by bootstrap) is always on. A **Linode Cloud
+  Firewall** is optional and free; if one is attached it is the first door and
+  must allow 22, 80 and 443 too — forget it and the box is unreachable while
+  `ufw status` looks fine. Recommended: attach one allowing only 22/80/443, so
+  a mistake in `ufw` alone does not expose anything.
+- **Turn on Linode Backups** (paid add-on, per Linode). It does not replace R2:
+  same provider, same account — lose the account, lose both. Linode Backups
+  restores fast and is the only copy of the `uploads` volume; R2 survives.
+- **Never publish the box's IP** (in docs, commits or issues). Behind the
+  orange cloud the IP is what lets someone bypass WAF and rate limits (§9.5).
+
+#### 9.1.1 Frontend on the box, same origin
+
+Cloudflare Pages was rejected — not on price (Pages is cheaper) but on the
+artifact. Vite bakes `VITE_API_URL` at build time; two origins mean two builds
+per commit, and the bits tested anywhere are never the bits shipped.
+
+The fix is to bake nothing: `devforge-fe/Dockerfile` pins `ENV VITE_API_URL=""`
+(an `ENV`, not an `ARG`, so nothing can be forgotten), the bundle calls relative
+paths, and the edge routes `/api`, `/ws`, `/uploads` to the API on the same
+origin. One FE image runs in every environment.
+
+- Empty base breaks `new URL(path, "")` (`TypeError: Invalid base URL`), so
+  `src/api/labs.ts` uses `import.meta.env.VITE_API_URL || location.origin` —
+  `||`, not `??`.
+- Gained: no CORS, no cross-subdomain cookies, crawler blocks stay in nginx.
+- Lost: per-PR previews. They could not log in anyway (`*.pages.dev` is a
+  different registrable domain, so the `Lax` cookie does not cross).
+- `devforge-web` only serves files (`nginx.static.conf`). It must never become a
+  second proxy (§9.9 #5).
+
+### 9.2 amd64 + GHCR — nothing is built on the box
+
+Linode and GitHub runners are both amd64, so images are built once in
+Actions, scanned there, pushed to GHCR, and only pulled on the box.
+
+1. **Rollback takes seconds** — start an image already on disk.
+2. **The box never compiles while students are typing.**
+3. **`up.sh` stays small** — `pull` + `up -d --wait`, no hand-written health loop.
+
+Six packages: `devforge-api`, `devforge-web`, `devforge-lab-{linux,git,docker,net}`.
+**Set each to Public once in the GitHub UI**, or the box needs
+`docker login ghcr.io` with a PAT just to pull its own release.
+
+Nothing pins the architecture (`CGO_ENABLED=0`, static Go, `apk`), so moving to
+ARM later changes no file — only the build runner.
+
+### 9.3 Cost
+
+| Item                 | Service                                             | Price                         |
+| -------------------- | --------------------------------------------------- | ----------------------------- |
+| **Prod server**      | Linode Shared 4 vCPU / 8 GB, Singapore              | **paid**, monthly             |
+| Server backups       | Linode Backups add-on                               | **paid**, scales with plan    |
+| **Dev server**       | Linode Shared 2 GB, Singapore                       | **paid**, monthly             |
+| **Domain**           |                                                     | **~300k₫/year**               |
+| TLS                  | Cloudflare Origin Certificate                       | 0                             |
+| DNS + proxy + WAF    | Cloudflare Free                                     | 0                             |
+| FE hosting           | same VPS                                            | 0                             |
+| Registry             | GHCR, public packages                               | 0                             |
+| CI/CD                | GitHub Actions, public repos                        | 0                             |
+| Scanning + lint      | Trivy, gitleaks, golangci-lint                      | 0                             |
+| Code quality         | SonarQube Cloud, public repos                       | 0 — waiting for `SONAR_TOKEN` |
+| Backup               | Cloudflare R2, 10 GB, zero egress                   | 0                             |
+| Email                | Resend 3000/month or Brevo 300/day                  | 0                             |
+| Uptime               | UptimeRobot / BetterStack free                      | 0                             |
+| Errors / metrics     | Sentry, Grafana Cloud free                          | 0 — not enabled               |
+| Analytics            | Umami Cloud                                         | 0 — not enabled               |
+| AI scenario builder  | OpenRouter                                          | §9.6 — the only variable cost |
+
+Fixed cost = two Linodes + Linode Backups (prod) + domain.
+
+### 9.4 Capacity: CPU is the ceiling, RAM is the backstop
+
+Each lab container is capped at 512 MB, 0.5 CPU, 256 pids
+(`internal/labs/adapter/dockerx/runtime.go`). Those are ceilings, not
+reservations.
 
 ```
-push develop  → CI lint·test·coverage·gitleaks·trivy fs·sonar
-push master   → giống hệt trên. Không build, không chạm registry
-
-tag v*        → CI như trên, rồi:
-              → release-guard + tag phải trên master
-              → build 6 image → quét → ghcr :v1.2.0
-              → chờ image fe cùng tag → ssh prod → up.sh
-            → không healthy trong 120s → IMAGE_TAG=$(cat .image-tag) up -d --wait
+16 containers × 512 MB cap       = 8 GB     ← theoretical, = all RAM
+16 containers × ~150 MB real RSS = 2.4 GB   vs ~6 GB free → fine
+16 containers × 0.5 vCPU         = 8 vCPU   vs 4 shared   → 2× oversubscribed
 ```
 
-Ba thứ phân biệt sơ đồ này với một sơ đồ "VPS + Docker Compose" thông thường, và
-cả ba đều là ràng buộc của chính sản phẩm chứ không phải sở thích:
+Only ~8 containers can be CPU-busy at once, and **shared** vCPU can lose time
+to neighbours on the same host. For teaching labs (mostly reading and typing)
+`MAX_CONTAINERS=16` is the starting point — an assumption, not a measurement.
+**Slow under real load → lower it to 12. Never raise it on this box.**
 
-1. **`docker-socket-proxy` + lab container.** App tự đẻ container — đó là sản phẩm. Kéo theo trần số container, reaper, và lý do không PaaS nào dùng được.
-2. **Không có worker/queue.** Reaper là một goroutine, email gửi đồng bộ. Thêm BullMQ hay một service worker lúc này là thêm tiến trình phải giám sát cho việc chưa tồn tại.
-3. **FE nằm cùng box, cùng origin.** Đây là lựa chọn, không phải mặc định: nó tốn gần như không CPU (phát file tĩnh, không build) và đổi lại là một image FE dùng chung được cho staging và prod — xem §9.1.1.
+Watch two numbers after launch:
 
-### 9.1 Máy chủ: Hostinger VPS
+- **CPU steal** — `st` in `top` / `vmstat 5`. Sustained above ~10% means
+  neighbours are taking the CPU the seat count assumes.
+- **Memory** — the 512 MB caps add up to all of RAM at 16 seats; the 2 GB swap
+  is what keeps a burst from becoming an OOM kill of Postgres.
 
-Lý do rời Oracle không phải tiền. Ba thứ phức tạp nhất của bản cũ **chỉ tồn tại vì
-chọn ARM free tier**: image phải build trên chính máy prod (runner Actions là
-amd64, giả lập arm64 qua QEMU chậm gấp cả chục lần) → không có registry → rollback
-phải build lại → `deploy/up.sh` phải tự bắt health, tự `git reset`, tự prune, ~90
-dòng bash tự viết. Bỏ Oracle thì cả ba tự biến mất, xem §9.2.
+Levers that need no code:
 
-| | Hostinger KVM2 | Dự án cần |
-| --- | --- | --- |
-| CPU | 2 vCPU amd64 | 2+ |
-| RAM | 8 GB | ~5 GB |
-| Disk | 100 GB NVMe | ~60 GB |
-| Vùng | **Singapore** | Singapore |
-| Giá | kiểm lúc mua — giá khuyến mãi và giá gia hạn chênh nhau nhiều | — |
+1. **Simulated labs cost zero containers** — the capacity check sits after the
+   sim branch in `labs.go`. Put sims ahead of container labs in the learning
+   path.
+2. **`LAB_SESSION_TTL` 60m → 20m** turns seats over three times faster.
+3. **Tune `MAX_CONTAINERS` from measured load**, not feel.
 
-Vẫn phải là **VPS thật có root, cài được Docker**: code đẻ container qua Docker
-Engine API, nên mọi PaaS (Vercel, Netlify, Render, Railway, Fly.io) loại ngay từ
-đầu. Điều đó **chỉ đúng với backend** — FE là SPA tĩnh nên đi đường khác, xem
-§9.1.1.
+More users or high steal → **Linode Dedicated CPU** (same vCPU count, no
+neighbours) or a 16 GB plan, then raise the cap. A bigger box is the right knob.
 
-Singapore → VN 30–50ms. Ràng buộc cứng, không phải sở thích: terminal là xterm.js
-qua WebSocket, mỗi phím gõ là một vòng round-trip. Hetzner rẻ hơn nhưng chỉ có
-EU/US (250–300ms) → hỏng đúng tính năng cốt lõi.
+### 9.5 Cloudflare and `TRUSTED_PROXIES` — two proxy layers
 
-Chọn **template OS có sẵn Docker** (Ubuntu 24.04 + Docker) → bỏ được nửa
-`deploy/bootstrap.sh`.
-
-⚠️ **Hostinger có tường lửa riêng trong hPanel.** Bài toán hai lớp cửa của Oracle
-VCN quay lại nguyên vẹn: phải mở 80/443 ở hPanel **và** ở `ufw`. Quên lớp nào thì
-máy cũng không ai vào được, và `ufw status` sẽ nói mọi thứ đều ổn.
-
-**Bật snapshot/backup tuần của Hostinger** — nhưng nó *không* thay
-`scripts/backup.sh` → R2. Snapshot nằm cùng nhà cung cấp: mất tài khoản là mất cả
-hai. Snapshot để khôi phục nhanh, R2 để sống sót.
-
-#### 9.1.1 Frontend ở lại trên box, cùng origin
-
-> **Cloudflare Pages đã bị loại, và không phải vì giá — Pages rẻ hơn.** Ghi lại để
-> không ai đề xuất lại: lý do là **artifact**.
-
-Vite bake `VITE_API_URL` lúc build. Tách hai origin thì giá trị bake vào staging
-khác giá trị bake vào production — hai bản build cho một commit, và một image
-FE dùng được ở cả hai nơi thành cái nhãn dán. Diễn tập ở staging xong thì
-thứ lên prod vẫn là bit chưa ai chạy.
-
-Cách thoát: **không bake gì cả.** `Dockerfile` ghim `ENV VITE_API_URL=""`, bundle
-gọi đường dẫn tương đối, biên route `/api`, `/ws`, `/uploads` sang API trên cùng
-origin — đúng thứ `deploy/nginx/devforge.conf` làm. Điều kiện là FE ở lại sau cùng cái
-proxy đó.
-
-Được thêm: cookie phiên hết bài SameSite/CORS/subdomain, và khối `@crawler` cho
-thẻ `og:` không phải viết lại thành Pages Function. Static vẫn được Cloudflare
-cam cache ở biên.
-
-Mất: **preview mỗi pull request**. Đổi lại là staging thật (§8) — thứ preview của
-Pages không thay được, vì nó chạy trên `*.pages.dev`, khác registrable domain với
-API, nên cookie `Lax` không đi qua và **không đăng nhập được**.
-
-Câu ở §9 *"mỗi vCPU dành cho FE là một vCPU lấy khỏi lab container"* đúng cho
-**build**, không đúng cho **phát file tĩnh** — mà từ giờ không có build nào chạy
-trên box nữa.
-
-### 9.2 amd64 + GHCR — image không còn build trên máy prod
-
-Hostinger là amd64, runner GitHub cũng amd64. Lý do duy nhất để build trên box đã
-hết.
-
-```
-push master → Actions build → ghcr.io/<owner>/devforge-api:<sha>
-            → ssh: docker compose pull && docker compose up -d --wait
-rollback    → IMAGE_TAG=<sha cũ> docker compose up -d --wait     ← vài giây
-```
-
-Lợi, theo thứ tự quan trọng:
-
-1. **Rollback từ 1–2 phút xuống vài giây.** Không build lại, chỉ đổi tag.
-2. **Box 2 vCPU không phải vừa build vừa chạy lab.** Đây là điểm chết thấy rõ nhất
-   trên máy nhỏ: học viên đang gõ trong terminal thì máy đi compile.
-3. `up.sh` mất hẳn phần build, phần `healthy()` tự viết thay bằng
-   `docker compose up -d --wait --wait-timeout 120`, còn khoảng 35 dòng.
-
-Điều kiện: **đặt package GHCR sang Public một lần trong UI**, nếu không box phải
-`docker login ghcr.io` bằng PAT. Repo đã public thì không có gì để giấu.
-
-**Image lab cũng đi qua GHCR.** Bốn image `devforge/{linux,git,docker,net}` không
-nằm trong compose — API tạo container từ tên image qua Docker API. Chúng build và
-được Trivy quét trong Actions như hai image kia, rồi `up.sh` pull về và
-`docker tag` lại thành đúng cái tên bảng `lab_images` đang giữ. Build lại trên box
-thì nhanh hơn vài giây, nhưng là bit khác với bit đã quét — mà đây đúng là bốn
-image có shell và người lạ gõ vào (§8 "Quét bảo mật").
-
-Không chỗ nào trong repo ghim kiến trúc (`CGO_ENABLED=0`, Go tĩnh thuần, `apk` tự
-phân giải), nên quay lại ARM sau này cũng không phải sửa dòng nào. Bảng đối chiếu
-arm64 của bản cũ bỏ đi vì không còn tác dụng.
-
-### 9.3 Bảng chi phí — không còn 0₫
-
-| Khoản | Dịch vụ | Giá |
-| --- | --- | --- |
-| **Máy chủ prod** | Hostinger KVM2 Singapore | **trả tiền** — kiểm lúc mua |
-| ~~**Máy chủ staging**~~ | ~~VPS loại nhỏ nhất, máy riêng (§8 "Staging")~~ | **0₫ — hoãn**, không mua lúc này |
-| **Tên miền** | | **~300k₫/năm** |
-| TLS | Cloudflare Origin Certificate | 0₫ |
-| DNS + proxy | Cloudflare Free | 0₫ |
-| FE hosting | cùng VPS, cùng origin (§9.1.1) | 0₫ |
-| Registry | GHCR (package public) | 0₫ |
-| CI/CD | GitHub Actions (repo public, không giới hạn phút) | 0₫ |
-| Quét lỗ hổng | Trivy (OSS, chạy trong Actions) | 0₫ |
-| Lint + coverage | golangci-lint (OSS, chạy trong Actions) | 0₫ |
-| Chất lượng mã | SonarQube Cloud, repo public — job `sonar` đã có, chờ `SONAR_TOKEN`, §8 | 0₫ |
-| Backup | Cloudflare R2, 10 GB, egress 0₫ | 0₫ |
-| Email | Resend 3000/tháng hoặc Brevo 300/ngày | 0₫ |
-| Metrics + log + alert | Grafana Cloud Free | 0₫ — ⏳ chưa bật, §1 |
-| Analytics | Umami Cloud | 0₫ — ⏳ chưa bật, §1 |
-| Sinh kịch bản sim | OpenRouter | xem §9.6 |
-
-⚠️ Không có dòng **SonarQube tự dựng** trong bảng này, và đó là chủ ý: giá của nó không phải tiền thuê mà là 2–4 GB cộng phần CPU lấy thẳng từ ghế lab — xem §8 "Quét bảo mật và chất lượng mã" và §9.4.
-
-**Chi phí cố định = VPS + tên miền.** Mọi thứ còn lại vẫn 0₫. Đây là khoản đánh
-đổi lấy: không còn chờ "out of host capacity", không còn nguy cơ bị thu hồi máy,
-không còn ARM.
-
-### 9.4 Sức chứa: CPU là trần, không phải RAM
-
-2 vCPU thay cho 4 OCPU → cắt đôi mọi con số.
-
-```
-12 container × 512 MB (trần Docker) = 6 GB    ← trần lý thuyết
-12 container × ~150 MB (RSS thật)   = 1,8 GB  vs ~6 GB còn trống → thoải mái
-12 container × 0.5 vCPU (nanoCPUs)  = 6 vCPU  vs 2 nhân thật     → oversubscribe 3×
-```
-
-`Memory` của Docker là **trần, không phải đặt chỗ**; image nền là alpine chạy
-`sleep infinity` + shell, RSS thật 20–60 MB lúc rảnh. `NanoCPUs` cũng là hạn ngạch
-(cfs_quota), nên oversubscribe không sao khi container rảnh.
-
-Nhưng **chỉ ~4 container bận CPU cùng lúc** trên 2 nhân. Với lab dạy học (phần lớn
-thời gian học viên đang gõ và đọc) thì `MAX_CONTAINERS=12` là ổn. Thấy chậm thì hạ
-xuống 8, đừng nâng lên.
-
-Ba đòn bẩy tăng số người phục vụ được, đều là biến môi trường hoặc thiết kế nội
-dung — không sửa code:
-
-1. **Bài mô phỏng tốn 0 container.** Bốn engine sim (CI/CD, Linux, tìm kiếm, sắp
-   xếp) không chiếm ghế nào; kiểm tra sức chứa nằm *sau* nhánh sim trong `labs.go`
-   một cách có chủ đích. Xếp sim lên trước container trong lộ trình học → nhân đôi
-   số người vào cùng lúc.
-2. **`LAB_SESSION_TTL` 60m → 20m.** Reaper quét theo deadline này, nên vòng quay
-   ghế nhanh gấp ba.
-3. **`MAX_CONTAINERS`** điều chỉnh theo tải thật đo được, không theo cảm giác.
-
-Cần hơn nữa thì lên **KVM4 (4 vCPU / 16 GB)** → `MAX_CONTAINERS=25`. Đây là cái
-núm đúng, không phải nới trần trên máy cũ.
-
-### 9.5 ⚠️ `TRUSTED_PROXIES` — giờ có HAI tầng proxy, không phải một
-
-Mọi thứ nhận dạng người gọi đều đọc `c.ClientIP()`: rate limit theo địa chỉ trên
-các route chia sẻ công khai (`PUBLIC_RATE_LIMIT`), cột `audit_logs.ip`, và địa chỉ
-trên màn hình thiết bị đang đăng nhập. Giá trị đó chỉ đúng khi server biết ai được
-phép nói thay người khác qua `X-Forwarded-For`.
-
-**Bản cũ dặn giữ Cloudflare ở chế độ DNS-only (mây xám). Điều đó nay ngược lại:**
-TLS là Cloudflare Origin Certificate, mà cert đó **chỉ Cloudflare tin**. Tắt mây
-cam là trình duyệt báo cert không hợp lệ ngay lập tức. Mây cam trở thành thành
-phần bắt buộc, và chuỗi request dài thêm một chặng:
+The Origin Certificate is trusted only by Cloudflare, so the **orange cloud is
+mandatory**: turn it off and browsers reject the cert immediately. The request
+path therefore has two proxies:
 
 ```
 browser → Cloudflare edge → nginx (container) → api (container)
 ```
 
-Hai việc phải làm, thiếu một cái là hỏng:
+Everything that identifies a caller reads `c.ClientIP()`: the per-IP rate limit
+on public share routes, `audit_logs.ip`, and the logged-in-devices screen. Both
+halves are required:
 
-1. **nginx phải khôi phục IP thật.** `set_real_ip_from <các dải IP Cloudflare>` +
-   `real_ip_header CF-Connecting-IP`. Không có thì `X-Forwarded-For` nginx gửi
-   sang API mang địa chỉ của edge node Cloudflare, không phải của người dùng. Dải
-   IP đổi theo thời gian: `curl -s https://www.cloudflare.com/ips-v4`.
-2. **`TRUSTED_PROXIES=127.0.0.1,::1,172.16.0.0/12`.** nginx nói chuyện với api qua
-   mạng bridge của compose nên peer mà Gin thấy là `172.x.x.x`.
+1. **nginx restores the real IP:** `set_real_ip_from <Cloudflare ranges>` (22
+   lines, dated in the file) + `real_ip_header CF-Connecting-IP`.
+2. **The API trusts nginx:** `TRUSTED_PROXIES=127.0.0.1,::1,172.16.0.0/12`, because
+   nginx reaches the API across the compose bridge.
 
-Để mặc định thì hỏng hai chỗ, cả hai chỉ nổ sau khi deploy (dev FE gọi thẳng
-`:8080` nên không thấy):
+Get either wrong and both symptoms appear, only in production:
 
-| Chỗ hỏng | Triệu chứng |
-| --- | --- |
-| `internal/labs/adapter/ratelimit/redis.go` — key là `c.ClientIP()` | `PUBLIC_RATE_LIMIT` 60/phút **theo địa chỉ** biến thành 60/phút **toàn cục**. Một người xem link chia sẻ làm cạn quota của tất cả. Self-DoS trên đúng bốn route sinh ra để đón người lạ. |
-| `audit_logs.ip`, `sess.ip` (màn hình thiết bị) | Mọi hàng ghi cùng một IP. Màn hình "thiết bị đang đăng nhập" mất ý nghĩa, audit mất dấu vết IP. |
+| Where                                                  | Symptom                                                                        |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `internal/labs/adapter/ratelimit/redis.go` (key = IP)  | `PUBLIC_RATE_LIMIT` 60/min per IP becomes 60/min for the whole internet        |
+| `audit_logs.ip`, devices screen                        | every row shows the same address                                               |
 
-Chỉ mở tới dải bridge khi **API không publish cổng nào ra ngoài** và nginx là lối
-vào duy nhất. Lab container chạy `--network=none` nên không tự nói chuyện được với
-API, nhưng điều kiện trên vẫn phải giữ.
+- Widening to the bridge range is safe only because the API publishes no port
+  and nginx is the sole way in. **Never `0.0.0.0/0`** — any caller could pick
+  their own IP. The server logs `slog.Warn` at start if it sees that, but still
+  boots.
+- Pinned by `cmd/server/trustedproxies_test.go` and by `make check-edge`
+  ("a forged X-Forwarded-For is replaced, not passed through").
+- **Cloudflare ranges change.** Refresh from `https://www.cloudflare.com/ips-v4`
+  and `/ips-v6` (§13.9). Nothing detects a missing range, and the symptom is the
+  table above for only some users.
 
-**Không bao giờ đặt `0.0.0.0/0`.** Tin mọi peer nghĩa là người gọi tự chọn địa chỉ
-của mình bằng cách gửi header — rate limit và dấu vết audit giao lại cho bất cứ ai
-hỏi. Server ghi `slog.Warn` lúc khởi động nếu thấy giá trị này, nhưng vẫn chạy:
-một server không chịu boot vì cấu hình proxy thì làm sập site theo hướng ngược
-lại.
+Cloudflare settings:
 
-Hành vi được ghim bởi `cmd/server/trustedproxies_test.go`, và nửa còn lại —
-`set_real_ip_from` + `real_ip_header` — bởi `make check-edge`, ca "a forged
-X-Forwarded-For is replaced, not passed through".
+- **SSL/TLS mode: Full (strict).** Never Flexible — that sends session cookies
+  in plain HTTP on the last hop.
+- **Cache rules by path, not host** (FE and API share the host). Cache only
+  `assets/*` and `index.html`. Leave `/api/*`, `/ws/*`, `/uploads/*` on default
+  bypass, WAF only. A "Cache Everything" rule on `/api/*` serves one user's
+  `Set-Cookie` response to another, and can break the `/ws/*` upgrade.
+- **Authenticated Origin Pulls** — prepared, not enabled. It stops anyone who
+  finds the VPS IP from bypassing WAF and rate limits. Two switches, strict
+  order: enable in the Cloudflare dashboard **first**, confirm the site still
+  serves, **then** uncomment `ssl_client_certificate` + `ssl_verify_client on` in
+  `deploy/nginx/devforge.conf`, put `cloudflare-origin-pull-ca.pem` in
+  `deploy/nginx/certs/`, and reload. Reverse the order and every request gets 400.
 
-⚠️ **Cache rule phải theo PATH, không theo host.** FE và API dùng chung một tên miền (§9.1.1), nên không còn cách tách bằng host nữa. Mây
-cam bật lên là có CDN, và đó là thứ tốt cho `assets/*` của SPA. Với đường dẫn API thì
-ngược lại:
+### 9.6 AI cost — the only line that can outspend the server
 
-- Bật "Cache Everything" trên đường API là **phát response có `Set-Cookie` của
-  người này cho người khác**. Mặc định Cloudflare không cache response có
-  `Set-Cookie`, nên đây là tai nạn do người tự bật rule, không phải mặc định — mà
-  đó chính là loại tai nạn khó tin nhất khi nó xảy ra.
-- Cache rule sai còn phá được bước nâng cấp lên WebSocket của `/ws/*`.
+The AI scenario builder calls OpenRouter: ~4k input tokens (12.4 KB system
+prompt), ~3k output (`maxTokens = 16000`).
 
-Quy tắc: cache rule chỉ phủ `assets/*` và `index.html`. Trên `/api/*`, `/ws/*`, `/uploads/*` để
-mặc định (bypass), và chỉ bật WAF chứ không bật cache.
+| Model                        | $/1M in | $/1M out | Per generation       |
+| ---------------------------- | ------- | -------- | -------------------- |
+| `anthropic/claude-opus-5`    | $5      | $25      | ~$0.095 ≈ **2,500₫** |
+| `anthropic/claude-sonnet-5`  | $3      | $15      | ~$0.057 ≈ 1,500₫     |
+| `anthropic/claude-haiku-4-5` | $1      | $5       | ~$0.019 ≈ **500₫**   |
 
-### 9.6 Chi phí AI — khoản duy nhất có thể vượt mặt hạ tầng
+100 students, 20% using it, ~3 runs/day: opus-5 ≈ 4.4M₫/month, haiku-4.5 ≈
+900k₫/month. At the hard cap (`AI_DAILY_LIMIT=10`, everyone maxing out) opus-5
+reaches ~74M₫/month.
 
-Tính năng nhờ AI dựng kịch bản mô phỏng gọi OpenRouter. Đo được: prompt hệ thống 12,4 KB → ~4k token input; `maxTokens = 16000`, kịch bản thực tế ~3k token output.
+Before turning it on: `OPENROUTER_MODEL=anthropic/claude-haiku-4-5`,
+`AI_DAILY_LIMIT=3`, and leave `OPENROUTER_API_KEY` empty on the first deploy.
+Fill it in after watching one real day of usage. Most `:free` models lack
+`response_format`, so there is no fully free path.
 
-| Model | Input $/1M | Output $/1M | 1 lượt sinh |
-| --- | --- | --- | --- |
-| `anthropic/claude-opus-5` | $5 | $25 | ~$0,095 ≈ **2.500₫** |
-| `anthropic/claude-sonnet-5` | $3 | $15 | ~$0,057 ≈ 1.500₫ |
-| `anthropic/claude-haiku-4-5` | $1 | $5 | ~$0,019 ≈ **500₫** |
+### 9.7 Risks
 
-Với 100 học viên, 20% dùng, ~3 lượt/ngày: opus-5 ≈ **4,4tr₫/tháng**, haiku-4.5 ≈ **900k₫/tháng**. Ở trần cứng (`AI_DAILY_LIMIT=10`, tất cả dùng hết) opus-5 lên tới **74tr₫/tháng**. Tiền AI vượt tiền server ở mọi kịch bản.
+1. **One box, no HA.** Box down = FE and API down together.
+2. **Backup is the first thing to make work, not the last.** A backup nobody has
+   restored is a guess (§13.7).
+3. **Cloudflare is a single point of failure.** Orange cloud off or account
+   trouble → the Origin cert is invalid and the site is down. Fallback: certbot +
+   Let's Encrypt (§9.8).
+4. **Dev catches most, not all.** Real traffic, real data, the SMTP provider
+   and the AI key exist only in production. Run §13.6 on production after every
+   release that touched the edge, auth or mail.
+5. **Shared CPU.** Neighbours can take CPU at the worst moment; watch steal
+   (§9.4) and move to Dedicated CPU if it stays high.
+6. **The `.env` and the cert have no automatic copy** (§8 "Environment
+   variables").
 
-Ba việc trước khi bật:
+### 9.8 Fallbacks
 
-1. `OPENROUTER_MODEL=anthropic/claude-haiku-4-5`. Sinh kịch bản là điền JSON theo schema — không cần model mạnh nhất. Model phải hỗ trợ `response_format` (structured outputs), nếu không request bị từ chối định tuyến; phần lớn model gắn `:free` trên OpenRouter không hỗ trợ, nên không có đường đi hoàn toàn miễn phí ở đây.
-2. `AI_DAILY_LIMIT=3` cho tới khi nhìn thấy số thật một ngày.
-3. **Để trống `OPENROUTER_API_KEY` khi mới lên.** Code đã xử lý: thiếu key hoặc thiếu model thì tính năng tắt, riêng endpoint đó trả 503, server chạy bình thường. Đây là mặc định đúng cho lần deploy đầu.
+| If                                 | Switch to                            | Trade-off                                                            |
+| ---------------------------------- | ------------------------------------ | -------------------------------------------------------------------- |
+| No dependence on Cloudflare proxy  | certbot + Let's Encrypt, grey cloud  | three moving parts: client, renewal cron, nginx reload hook          |
+| Shared CPU steal too high          | Linode Dedicated CPU, same region    | more per month; Linode "Resize" keeps the disk and IP               |
+| Another provider                   | DigitalOcean / Vultr / Hostinger SG  | rebuild + DNS change; everything in §13 applies unchanged            |
+| Lowest latency                     | Vietnamese VPS (AZDIGI, Vietnix)     | <20 ms, local payment, pricier                                       |
+| Most CPU per đồng                  | Contabo Singapore 4 vCPU / 8 GB      | oversold, slow support                                               |
+| Back to 0₫                         | Oracle Always Free A1 (ARM)          | build on box, no registry, rollback = rebuild — everything §9.2 removed |
 
-### 9.7 Rủi ro của phương án này
+### 9.9 Self-hosting traps
 
-1. **Một máy prod, không HA.** Máy chết là cả FE lẫn API chết cùng lúc — cùng
-   origin nghĩa là không còn nửa nào ở hạ tầng khác để sống sót và hiện một trang
-   lỗi tử tế. Staging không đỡ được: nó là máy diễn tập, không phải máy dự phòng.
-2. **Backup là chặng ĐẦU TIÊN, không phải chặng cuối.** Snapshot Hostinger phục
-   hồi nhanh nhưng nằm cùng nhà cung cấp; `pg_dump` → R2 là thứ sống sót khi mất
-   tài khoản. Cron đã nằm trong `bootstrap.sh`, nhưng **diễn tập restore vẫn là
-   việc phải làm bằng tay** — `./scripts/restore.sh` — và bản backup chưa ai
-   restore là một phỏng đoán.
-3. **Cloudflare thành điểm chết đơn.** Mây cam tắt (hoặc tài khoản có vấn đề) là
-   cert Origin không còn hợp lệ và site đứt. Đường lùi có sẵn: đổi sang certbot +
-   Let's Encrypt, xem §9.8.
-4. **Giá gia hạn Hostinger, nhân hai.** Giá khuyến mãi chu kỳ đầu và giá gia hạn
-   chênh nhau nhiều, và giờ có hai máy với hai ngày hết hạn. Ghi cả hai vào lịch.
-5. **Máy staging là bề mặt tấn công thứ hai.** Cùng codebase, cùng cổng mở, nhưng
-   không ai theo dõi và không có backup. Nó phải được `bootstrap.sh` và `ufw` đối
-   xử đúng như prod — một máy staging bị chiếm vẫn là một máy trong tay người lạ,
-   và nó có khoá SSH của CD.
-
-### 9.8 Các đường lùi
-
-| Nếu | Đổi sang | Đánh đổi |
-| --- | --- | --- |
-| Không muốn phụ thuộc Cloudflare proxy | **certbot + Let's Encrypt**, mây xám | Được giữ DNS-only, nhưng thêm ba phần động phải bảo trì: client, cron gia hạn, hook reload nginx |
-| Muốn nhà cung cấp nhiều tài liệu hơn | **DigitalOcean / Vultr Singapore** | Đắt hơn ~1,5–2×, bù lại tài liệu và snapshot 1 nút |
-| Cần độ trễ thấp nhất | **VPS Việt Nam** (AZDIGI/Vietnix) | <20ms, thanh toán nội địa, đắt hơn |
-| Cần nhiều CPU nhất trên mỗi đồng | **Contabo Singapore** 4 vCPU/8 GB | Rẻ nhất nhóm, nhưng hay oversell và support chậm |
-| Chấp nhận lại 0₫ | Quay về **Oracle Always Free A1** | Kéo cả ba thứ phức tạp ở §9.1 quay lại: build trên box, không registry, rollback build lại |
-
-### 9.9 Bẫy của việc tự dựng trên một VPS
-
-Năm cái dưới đây không phải kiến trúc — chúng là những chỗ một sơ đồ đúng vẫn hỏng lúc dựng thật.
-
-#### 1. 🔴 Uptime monitor phải nằm NGOÀI hạ tầng nó giám sát
-
-Đây là lỗi phổ biến nhất khi tự dựng: cài Uptime Kuma bằng docker ngay trên máy prod. VPS chết → monitor chết theo → **không ai báo gì**. Thứ duy nhất nó phát hiện được là "một container chết trong khi máy vẫn sống", tức đúng trường hợp ít nghiêm trọng nhất.
-
-Dùng dịch vụ ngoài: **UptimeRobot / BetterStack / Cloudflare Health Check**, bản free, ping `https://<domain>/readyz` mỗi 5 phút, báo về Telegram.
-
-`/readyz` chứ không phải `/healthz` — cùng lý do như điều kiện rollback ở §8: `/healthz` xanh cả khi database đã chết.
-
-#### 2. 🔴 Docker publish port thì `ufw` không chặn được
-
-Docker chèn luật iptables **trước** ufw. Nghĩa là:
-
-```yaml
-ports: ["5432:5432"]              # ❌ Postgres mở ra internet, dù `ufw status` nói đã chặn
-ports: ["127.0.0.1:5432:5432"]    # ✅ chỉ loopback của host
-expose: ["5432"]                  # ✅ chỉ trong mạng compose, tốt hơn nữa
-```
-
-Đây là cách rò rỉ database phổ biến nhất trên VPS tự dựng, và `ufw status` không hề nói dối — nó chỉ không phải nơi luật đó được áp.
-
-`docker-compose.yml` hiện tại **đã đúng**: postgres, redis và docker-proxy đều ghim `127.0.0.1:`. Đừng bỏ tiền tố đó đi để "cho tiện debug từ máy khác" — dùng SSH tunnel.
-
-#### 3. 🟠 Log của Docker mặc định không có trần
-
-`json-file` không giới hạn dung lượng. Một lab container log loạn ăn hết đĩa và kéo Postgres chết theo. `deploy/bootstrap.sh` **đã xử lý**:
-
-```json
-{ "log-driver": "json-file", "log-opts": { "max-size": "10m", "max-file": "3" } }
-```
-
-Ghi lại ở đây vì nó là thứ dễ bị bỏ khi dựng máy bằng tay thay vì chạy script.
-
-#### 4. 🟠 Luôn có hai tường lửa
-
-Tường lửa của nhà cung cấp (Hostinger hPanel, Oracle VCN, DO Cloud Firewall) là cửa thứ nhất; `ufw` là cửa thứ hai. Phải mở 80/443 ở **cả hai**. Quên cửa nào thì máy cũng không ai vào được, và lớp còn lại sẽ báo là mọi thứ đều ổn.
-
-#### 5. 🟡 Một proxy, và một server tĩnh — không phải hai proxy
-
-Sơ đồ tự dựng hay có nginx ở biên (TLS + routing) **và** một nginx nữa bên trong làm "proxy cho frontend/backend". Hai tầng proxy trên cùng một máy không thêm gì ngoài một hop, một file config nữa phải đồng bộ, và một chỗ nữa để `X-Forwarded-For` bị đứt.
-
-Ở đây **có hai tiến trình phục vụ HTTP, nhưng chỉ một cái proxy**: biên làm TLS và routing, còn image `devforge-web` chỉ `file_server` cho `dist` trên loopback nội bộ — nó không proxy đi đâu và không đọc `X-Forwarded-For`. Cái giá là một hop loopback; cái được là FE ship dưới dạng một artifact tự chứa, deploy được ở mọi môi trường như image api. Đừng biến `devforge-web` thành proxy — lúc đó nó mới thành cái bẫy ở trên.
+1. 🔴 **The uptime monitor must live outside what it monitors.** Uptime Kuma on
+   the prod box dies with the box and reports nothing. Use UptimeRobot,
+   BetterStack or a Cloudflare Health Check on `https://<domain>/readyz` every
+   5 min, alerting to Telegram. `/readyz`, not `/healthz`.
+2. 🔴 **Docker-published ports bypass `ufw`.** Docker inserts iptables rules ahead
+   of ufw. `"5432:5432"` exposes Postgres to the internet while `ufw status`
+   says blocked. Use `127.0.0.1:5432:5432` or `expose:`. The compose files are
+   correct today; do not drop the `127.0.0.1:` prefix "to debug".
+3. 🟠 **Docker logs are unbounded by default.** `bootstrap.sh` sets
+   `json-file` 10 MB × 3 in `/etc/docker/daemon.json`. A box set up by hand
+   without it fills its disk from one noisy lab.
+4. 🟠 **Two firewalls** — provider (Linode Cloud Firewall, if attached) and
+   `ufw`. Open 22/80/443 in both.
+5. 🟡 **One proxy, one static server — never two proxies.** nginx at the edge
+   does TLS and routing; `devforge-web` only serves files. A second proxy adds a
+   hop, a config to sync, and another place where `X-Forwarded-For` breaks.
 
 ---
 
-## 13. Việc cần làm — mua máy
+## 13. Runbook — from no box to production
 
-Đây là danh sách quyết định. Mọi thứ ở §8 và §9 mô tả **đích**. Khoảng cách phần mềm đã đóng: Caddy → nginx xong, `deploy/caddy/` đã xoá, `bootstrap.sh` và `.env.prod.example` khớp máy Hostinger. **Còn lại đúng một thứ chặn: chưa có máy.**
-
-### 13.0 Lỗi đã có sẵn trên đĩa — đã sửa hết
-
-Mười một lỗi (mười trong lần rà đầu, #3 lộ ra khi rà lại), sửa xong 2026-09-06.
-Giữ lại đây một dòng mỗi lỗi vì lý do vẫn còn giá trị; chi tiết nằm trong comment
-ở chính file đã sửa.
-
-| # | Chỗ | Lỗi | Trạng thái |
-| --- | --- | --- | --- |
-| 1 | `devforge-fe/Dockerfile` | Thiếu `ARG VITE_API_URL` → Docker bỏ qua build-arg không khai báo → bundle rơi về `http://localhost:8080`, trang https gọi http localhost, mixed-content chặn, app chết | ✅ vá **mạnh hơn bản đầu**: `ENV VITE_API_URL=""` cố định, không còn build-arg nào để quên |
-| 2 | `docker-compose.prod.yml` | Truyền `VITE_API_URL: https://${DOMAIN}/api` mà `path` đã có sẵn `/api/...` → mọi request thành `/api/api/...` → 404 | ✅ compose không truyền biến này nữa; không còn giá trị nào để đặt sai |
-| 3 | `deploy/up.sh` | Rollback `git checkout <sha>` để lại detached HEAD → `git pull --ff-only` lần sau từ chối chạy → CD hỏng vĩnh viễn | ✅ rollback đổi sang `IMAGE_TAG`, không `git checkout`; CD `checkout --force` chứ không `pull` |
-| 4 | `deploy/up.sh` | Rollback chạy lại `migrate up` với `migrations/` cũ → chết vì version đã apply không còn file → đứt giữa sự cố | ✅ cờ `skip-migrate` trên nhánh rollback |
-| 5 | `scripts/restore.sh` | Dòng cuối `[ ... ] && echo` → nhánh `--into-live` cho false → exit 1 dù restore thành công, đúng lúc đang có sự cố | ✅ đổi thành `if ... fi` |
-| 6 | Cả hai repo | Không có `.dockerignore` → `COPY . .` nuốt `.env` prod vào layer cache | ✅ thêm cả hai |
-| 7 | `scripts/backup.sh` | Cron chỉ nằm trong comment, không ai cài → làm đúng quy trình vẫn ra không có backup nào | ✅ `/etc/cron.d/devforge-backup` trong `bootstrap.sh` |
-| 8 | `.env.prod.example` | Nói "CI writes it from GitHub Secrets" — ngược với §8 và với `ci.yml` | ✅ xoá |
-| 9 | `.env.prod.example` | `DB_PASSWORD` ở hai chỗ → điền một quên một → `migrate` chết trên máy không ai nhìn | ✅ `DATABASE_URL` nội suy từ `DB_*` |
-| 10 | `ci.yml` job deploy | `ssh` không timeout → box treo giữ runner 6 tiếng | ✅ `timeout 1800`, `ConnectTimeout=10`, `BatchMode=yes` |
-| 11 | `devforge-fe` terminal | `ws.onclose` không thử lại → mỗi lần deploy đá mọi học viên khỏi terminal đang mở | ✅ reconnect có backoff, phân biệt close frame với đứt 1006 |
-
-### 13.1 Việc phải làm bằng tay (cần đăng nhập, không script hoá được)
-
-| | Việc | Ghi chú |
-| --- | --- | --- |
-| ☐ | Mua VPS Hostinger **KVM2, vùng Singapore**, template Ubuntu 24.04 **có sẵn Docker** | Máy prod. Kiểm giá gia hạn, không chỉ giá khuyến mãi |
-| ~~☐~~ | ~~Mua **VPS thứ hai, loại nhỏ nhất**~~ | **Hoãn** (2026-09-21). Khi nào làm thì §8 "Staging" — máy riêng chứ không phải stack thứ hai, lý do ở đúng mục đó |
-| ☐ | Mở **80 và 443 trong tường lửa hPanel** | Lớp cửa thứ nhất — `ufw` là lớp thứ hai, quên lớp nào cũng không vào được (§9.1) |
-| ☐ | Bật **snapshot/backup tuần** của Hostinger | Không thay R2, xem §9.7 |
-| ☐ | DNS Cloudflare: `<domain>` A → IP VPS prod | **Mây cam.** Chỉ một bản ghi — `staging.` để lúc nào dựng staging. Không còn bản ghi `api.` nào để tạo (§9.1.1) |
-| ☐ | Tạo **Cloudflare Origin Certificate** cho `<domain>` + `*.<domain>` | Lưu vào `deploy/nginx/certs/`, key `chmod 600` |
-| ☐ | Đặt package GHCR (`devforge-api`, `devforge-web`, 4 `devforge-lab-*`) sang **Public** | ❗Không làm thì box phải `docker login ghcr.io` bằng PAT chỉ để pull bản phát hành của chính mình |
-| ☐ | Google Console: đăng ký redirect URI `https://<domain>/api/auth/google/callback` | Khớp từng ký tự. **Một cái là đủ** — cái thứ hai chỉ cần khi dựng staging, đang hoãn |
-| ☐ | Tạo bucket **R2** + lifecycle xoá sau 30 ngày | Nếu chưa có |
-| ☐ | Secrets repo **be**: `SSH_HOST`, `SSH_USER`, `SSH_KEY` (prod) | Khoá deploy riêng, không dùng lại khoá cá nhân |
-| ~~☐~~ | ~~Secrets repo **be**: `STAGING_SSH_*`~~ | Không còn dùng. Job `deploy-staging` đã bị bỏ — staging deploy bằng tay, cùng tag với production |
-| ☐ | Repo **fe**: không cần secret nào | `GITHUB_TOKEN` mặc định đủ quyền `packages: write` cho GHCR cùng owner |
-| ☐ | **Uptime monitor ngoài** ping `https://<domain>/readyz`, báo Telegram | 5 phút, và là thứ duy nhất báo được "máy chết" (§9.9). Đừng cài trên chính VPS. Không cần monitor cho staging |
-| ☐ | Kiểm cache rule Cloudflare **không phủ `/api/*`, `/ws/*`, `/uploads/*`** | Cùng origin nên cache rule phải theo path chứ không theo host. Cache `/api/*` là phát dữ liệu người này cho người kia (§9.5) |
-| ☐ | Bật **Authenticated Origin Pulls** ở Cloudflare, rồi bỏ comment hai dòng trong `deploy/nginx/devforge.conf` | Origin Cert chỉ chứng minh server với Cloudflare; nó **không** ngăn ai tìm ra IP thật rồi gọi thẳng, bỏ qua WAF và rate limit. Thứ tự bắt buộc: bật ở dashboard **trước**, xác nhận site còn phục vụ, rồi mới sửa nginx. Ngược lại là 400 cho tất cả |
-| ☐ | Sentry cho Go + React | Lỗi runtime kèm stacktrace, rẻ hơn nhiều so với dựng cả stack quan sát |
-
-### 13.2 Repo `devforge-be` — file phải sửa
-
-| | File | Việc |
-| --- | --- | --- |
-| ✅ | `deploy/nginx/devforge.conf` | **Mới, đã viết.** Một site duy nhất (`server_name _`, box chỉ phục vụ API): 80 → 301 sang 443; cert Origin; `set_real_ip_from` các dải Cloudflare + `real_ip_header CF-Connecting-IP`; `location /ws/` với `proxy_buffering off` + timeout 3600s; `location /`; `client_max_body_size` cho upload ảnh. ⚠️ Upstream phải đi qua biến + `resolver 127.0.0.11` — nginx cache DNS vĩnh viễn, container `api` mới sau mỗi deploy sẽ nhận 502 nếu không |
-| ✅ | `deploy/nginx/certs/.gitignore` | **Mới.** `*` + `!.gitignore` — khoá riêng không bao giờ vào git |
-| ✅ | `deploy/caddy/` | Đã xoá cả thư mục. Bản dev trong đó vốn đã mồ côi — không compose file nào mount nó |
-| ✅ | `docker-compose.prod.yml` | `api` và `web` đổi từ `build:` sang `image: ${IMAGE_REPO}/devforge-{api,web}:${IMAGE_TAG}`, **không còn khoá `build:` nào** — có nó thì `up` lặng lẽ build lại khi thiếu image, tức là box quay về compile bản phát hành. `IMAGE_TAG` dùng `${IMAGE_TAG:?}` chứ không mặc định. Service `web` **ở lại** (§9.1.1 đảo quyết định Pages). Service `caddy` đã đổi thành `nginx`: mount `devforge.conf` + `certs/`, hết `caddy_data`/`caddy_config` (Origin Cert không có state để giữ), và có healthcheck riêng trên `127.0.0.1:81` vì `up -d --wait` tính một container đang crash-loop là đang chạy |
-| ✅ | `deploy/up.sh` | Viết lại: `pull` thay `build`, `up -d --wait --wait-timeout 120` thay hàm `healthy()` tự viết, rollback đổi sang `IMAGE_TAG=$(cat .image-tag)` và **không chạy lại migrate** (lỗi 13.0#4). Đòi `IMAGE_TAG`. Pull 4 lab image rồi `docker tag` về `devforge/<tên>:latest` cho khớp bảng `lab_images`. Lần deploy đầu chưa có `.image-tag` → nói thẳng là không có gì để lùi thay vì lùi bừa |
-| ✅ | `deploy/bootstrap.sh` | Docker: **kiểm rồi thoát**, không cài — hai bản cài trên một máy là chỗ `docker ps` và compose bất đồng ý ai giữ container. Bỏ clone fe; ghi chú tường lửa hPanel; swap 2 GB; lời nhắn cuối nói cert Origin thay vì ACME |
-| ✅ | `.env.prod.example` | `IMAGE_REPO` có; `PUBLIC_URL`/`FRONTEND_URL`/`CORS_ORIGINS`/`GOOGLE_REDIRECT_URL` đã khớp bảng §8; `ACME_EMAIL` đã bỏ; `MAX_CONTAINERS=12`; `LAB_SESSION_TTL=20m` |
-| ✅ | `.github/workflows/ci.yml` | Job `images` (**chỉ tag `v*`**: release-guard → tag phải trên master → build → quét → push `:v1.2.0`), job `deploy` (chờ `devforge-web:<tag>` rồi ssh, truyền `IMAGE_TAG`). Nhánh không build gì. Chỉ checkout clone be — repo fe không còn trên box |
-| ✅ | `.github/workflows/ci.yml` | `trivy image` chạy trên image `--load` **trước** bước push, cộng 4 lab image; `trivy fs` và `trivy edge image` trong job `secrets`. Cờ: `--severity HIGH,CRITICAL --ignore-unfixed --exit-code 1`. ⚠️ Bước này **chưa từng chạy** cho tới 2026-09-18 vì tag action sai — xem §13.6 |
-| ✅ | `.github/workflows/ci.yml` | `go vet` → `golangci-lint run`; `go test` → `-coverprofile` + sàn **16.5%** (số của cây lúc thêm bước này là 16.8%). Bánh cóc: nâng khi coverage lên, không hạ để build xanh |
-| ✅ | `.trivyignore` | Rỗng có chủ ý, chỉ còn quy tắc: mỗi dòng bỏ qua **phải có `exp:<ngày>`** kèm lý do. Không hạn = tắt scanner cho CVE đó vĩnh viễn |
-| ✅ | `.golangci.yml` | v2, `default: standard` + `bodyclose`, `rowserrcheck`, `sqlclosecheck`, `errorlint`. Dùng preset loại trừ có sẵn thay vì danh sách tự chế. Cây đang **0 issue** — 5 lỗi thật đã vá: field `total` chết ở `streak.go`, `%v` → `%w` ở `simgen.go`, `client.IsErrNotFound` đã deprecated → `cerrdefs.IsNotFound`, thứ tự trả về của helper test |
-| ◐ | `deploy/DEPLOY.md` | Đã viết lại theo thứ tự của §13.4, tách nhỏ hơn, cộng mục 502-sau-deploy. **Chưa ai chạy nó trên máy thật** — những chỗ chỉ biết khi đứng trên máy có dấu ⚠️ *kiểm trên máy*, sửa ngay trong lần dựng đầu |
-| ✅ | `Makefile` | `release` (tag + push cả hai repo, chặn tag trùng và cây bẩn), `cover`, và `check-edge` — xem dòng dưới |
-| ✅ | `scripts/edge-routes.check.sh` | **Mới.** Dựng `devforge.conf` thật trước hai upstream giả tên `api`/`web` rồi hỏi 14 đường dẫn qua https. `nginx -t` chỉ nói file cú pháp đúng; nó không nói `/uploads/*` có rơi vào SPA hay không, mà đó là lỗi trả **200 kèm ảnh vỡ** chứ không phải 404 để grep. Đã bắt một lỗi thật lúc viết: `{4}` trong regex ngày bị nginx đọc là mở block, phải quote |
-| ✅ | Comment trong code | Đổi hết sang nginx: `cmd/server/router.go`, `internal/config/config.go`, `internal/labs/adapter/rest/preview.go`, `deploy/up.sh`, `ci.yml`, `.env.example`; `behindCaddy` → `behindEdge` trong `trustedproxies_test.go`. Chỉ là chữ, `go build ./...` và test xanh |
-
-### 13.3 Repo `devforge-fe` — file phải sửa
-
-> **Bảng này đã đổi hẳn nội dung.** Bản trước là danh sách việc chuyển sang
-> Cloudflare Pages (Pages Function, `_redirects`, `_headers`, xoá `Dockerfile`).
-> §9.1.1 đảo quyết định đó, nên toàn bộ những dòng ấy **không còn là việc** — giữ
-> lại đây một câu để người đọc sau không đi tìm chúng.
-
-| | File | Việc |
-| --- | --- | --- |
-| ✅ | `Dockerfile` | `ENV VITE_API_URL=""` thay cho `ARG VITE_API_URL` — không còn build-arg nào để quên truyền, và image hết dính môi trường. Vá luôn lớp lỗi 13.0#1 tận gốc thay vì vá triệu chứng |
-| ✅ | `src/api/labs.ts` | `??` → `\|\|` cho `VITE_API_URL`: `new URL(path, "")` ném `TypeError: Invalid base URL`, nên base rỗng phải rơi về `location.origin` |
-| ✅ | `src/components/LabTerminal.tsx` | Reconnect có backoff khi socket đứt bất thường (mã 1006). Không có nó thì **mỗi lần deploy đá cả lớp ra khỏi terminal** |
-| ✅ | `src/lib/wsRetry.ts` + `.check.ts` | Quy tắc "đóng sạch = phiên kết thúc, đóng bất thường = thử lại" tách ra khỏi component và có assert riêng. Đăng ký trong `npm run check` |
-| ✅ | `.github/workflows/ci.yml` | Thêm `trivy fs`, job `image` (**chỉ tag `v*`**: tag phải trên master → build → `trivy image` → push `devforge-web:v1.2.0`). Nhánh không build gì. Vẫn **không có** job deploy |
-| ✅ | `.env` local | `VITE_API_URL=http://localhost:8888` khớp `PORT=8888` trong `devforge-be/.env`. Hai file `.env.example` vẫn ghi 8080 và cũng khớp nhau — không đụng, đổi một bên là làm hỏng máy của người đang dùng bên kia |
-
-### 13.4 Thứ tự
-
-**Đã xong, không phụ thuộc máy:**
-
-```
-✅ reconnect terminal (fe)             ← thứ đáng làm nhất, và không nằm trong pipeline
-✅ pipeline artifact: build khi cắt tag → quét → GHCR :v1.2.0
-✅ trivy image (api + 4 lab) trước bước push, trivy fs cho dependency
-✅ golangci-lint thay go vet + sàn coverage
-✅ cổng xuyên repo qua registry + make release + release-guard (13 ca kiểm)
-✅ Caddy → nginx: devforge.conf + certs/, compose đổi service, deploy/caddy/ xoá
-✅ bootstrap.sh cho template Hostinger, .env.prod.example khớp bảng §8
-✅ make check-edge — 14 route của biên, chạy được trên máy dev
-✅ deploy/DEPLOY.md viết lại  ← còn phải sửa lại lúc đứng trên máy thật
-```
-
-**Còn lại, theo thứ tự bắt buộc. Từ đây mọi bước đều cần máy:**
-
-```
-0. Đặt 6 package GHCR sang Public        ← làm được NGAY, không cần máy
-1. Mua máy + DNS + Origin Cert           (13.1, phần hạ tầng)
-2. bootstrap.sh trên máy mới + .env + cert
-3. make release v=v0.1.0, rồi IMAGE_TAG=v0.1.0 up.sh chạy tay trên máy
-   ← phải là tag PHIÊN BẢN, không phải sha: §8 đầu mục nói vì sao
-   ← job deploy tự bỏ qua vì chưa có SSH_HOST, nên master vẫn xanh
-4. R2 + chạy backup tay + DIỄN TẬP RESTORE   ← đừng để sau
-5. Bật CD = thêm 3 secret SSH, rồi make release v=v0.1.1, xem nó chạy hết đường
-6. Diễn tập rollback bằng tay: IMAGE_TAG=<tag cũ> docker compose up -d --wait
-7. Bật Authenticated Origin Pulls  ← sau khi site đã chạy, thứ tự ở DEPLOY.md §1
-8. VPS thứ hai cho staging       ← HOÃN (2026-09-21), không nằm trong đường lên prod
-   khi nào cần: bootstrap.sh + khối STAGING cuối .env.prod.example
-   DNS staging.<domain> + Google redirect URI thứ hai
-   deploy bằng tay: IMAGE_TAG=<tag> ./deploy/up.sh — không có job tự động
-9. SonarQube Cloud: tạo tài khoản, bind 2 repo, dán SONAR_TOKEN
-   ← job `sonar` đã có sẵn và đang tự bỏ qua; token là thứ bật nó lên
-   ← đối chiếu sonar.projectKey/sonar.organization với UI ở lần chạy đầu
-```
-
-Runbook từng bước: [deploy/DEPLOY.md](deploy/DEPLOY.md). Nó đánh số theo đúng
-danh sách này, cộng một mục cho lỗi 502-sau-deploy.
-
-Bước 4 và bước 6 là hai bước hay bị bỏ nhất và cũng là hai bước duy nhất chứng minh được lưới an toàn có thật.
-
-⚠️ **Tag là thứ duy nhất build, nên tag đầu tiên là lần đầu toàn bộ đường build chạy thật.** Không có bước nào trước đó dựng image, nên không có gì để so. Cắt một tag thử (`v0.0.1-rc1` chẳng hạn) trước khi cắt tag thật: nó đi hết build, quét, push, rồi dừng ở job `deploy` vì chưa có `SSH_HOST` — đúng thứ cần biết, không chạm vào máy nào.
-
-### 13.5 Kiểm chứng sau khi lên
+Every command on the box runs as user `devforge` in
+`/opt/devforge/devforge-be` unless it says root. Define this once per shell:
 
 ```bash
-curl -sf https://<domain>/healthz              # tiến trình sống
-curl -sf https://<domain>/readyz               # + nối được DB
-curl -sI https://<domain>/ | grep -i cf-       # FE đi qua Cloudflare
+cd /opt/devforge/devforge-be
+dc() { IMAGE_TAG="${IMAGE_TAG:-$(cat .image-tag)}" docker compose -f docker-compose.yml -f docker-compose.prod.yml "$@"; }
 ```
 
-Trên trình duyệt, những thứ chỉ hỏng ở prod nên phải nhìn tận mắt:
+⚠️ **Plain `docker compose -f … -f docker-compose.prod.yml` fails on the box**
+for every subcommand, `ps` and `logs` included:
+`required variable IMAGE_TAG is missing a value`. `IMAGE_TAG` is required on
+purpose (no accidental `latest`), so every manual command must pass it — `dc`
+reads it from `.image-tag`. `scripts/backup.sh` and `restore.sh` use the base file
+only and are unaffected.
 
-- **Đăng nhập rồi F5** — còn đăng nhập nghĩa là cookie same-site đúng.
-- **Mở một lab, gõ vài phím** — không khựng nghĩa là `proxy_buffering off` đúng.
-- **Xem một ảnh bìa** — hiện được nghĩa là biên có route riêng cho `/uploads/*`; nếu nó trả `index.html` kèm 200 thì ảnh vỡ chứ không 404.
-- **Mở một lab rồi `docker restart` container api** — terminal phải tự nối lại chứ không chết hẳn. Đây là thứ duy nhất kiểm được reconnect, và nó là thứ mỗi lần deploy sẽ làm.
-- **Dán một link `/r/<id>` vào Zalo/Slack** — ra thẻ xem trước nghĩa là khối `@crawler` ở biên chạy, và nó đứng đúng trước route bắt-tất-cả.
-- **Xem `audit_logs.ip` của lần đăng nhập vừa rồi** — ra IP thật của bạn, không phải IP Cloudflare, nghĩa là §9.5 đã đúng cả hai tầng.
+### 13.0 Status
 
-### 13.6 Nợ lại có chủ ý
+Checked 2026-10-07. Update this block whenever a line changes.
 
-| Việc | Vì sao chưa làm |
-| --- | --- |
-| Gom log / metric / alert (P3.5) | Chưa chặn việc lên prod. Làm ngay sau khi có người dùng thật |
-| ~~Uptime monitor ngoài~~ | Đã chuyển lên 13.1 — quá rẻ để xếp vào nợ |
-| ~~Sentry~~ | Đã chuyển lên 13.1, cùng lý do |
-| ~~trivy quét image~~ | **Đã làm — và lần chạy thật đầu tiên là 2026-09-18.** Từ lúc thêm cho tới hôm đó nó chưa từng thực thi: `aquasecurity/trivy-action@0.28.0` không phải tag có thật (upstream có `v` ở đầu), nên job chết ở "Set up job" trên mọi nhánh kể cả master. Lần chạy thật đầu tiên ra 3 CVE Go (2 CRITICAL ở `pgx`), 1 HIGH npm, 17 HIGH trong binary Caddy của image `devforge-web`, và 39 HIGH trong `nginx:1.27-alpine` mà biên đang ghim. Bài học không phải về trivy: **một bước CI chưa từng thấy đỏ cũng chưa từng thấy xanh** |
-| ~~SonarCloud~~ | **Hết là nợ.** Job `sonar` đã có ở cả hai repo, gate chặn bằng `sonar.qualitygate.wait=true`, và nó tự bỏ qua tới khi có `SONAR_TOKEN` — §13.4 bước 9. Tự dựng SonarQube thì **không bao giờ** trên box này, §9.4 |
-| Reconnect cho WebSocket chat | `LabTerminal` đã có; `src/api/chat.ts` dùng chung `terminalURL` nhưng chưa dùng chung phần thử lại. Ít đau hơn: mất một socket chat không giết một phiên lab |
-| Staging BE | **Nợ, và đang cố ý không trả** (2026-09-21). Hai thứ đã mất: job `deploy-staging` bị bỏ khi nhánh thôi build (nó deploy tag trôi `:master`, giờ không ai đẩy), và máy thì hoãn mua. Hệ quả duy nhất đáng nhớ: **production là máy thật đầu tiên mà mọi lỗi cấu hình biên sẽ lộ ra**. Dựng lại được bất cứ lúc nào bằng `bootstrap.sh` + deploy tay với đúng tag prod dùng |
-| Bỏ Redis (dồn session vào Postgres) | Đang chạy, 0 cấu hình. Lãi một container, không đáng ưu tiên |
+| Item                                        | State                                                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Production box                              | ◐ Linode bought — `ap-south` (Singapore), 4 shared vCPU / 8 GB / 160 GB. Still **Arch Linux**, password SSH login **on**, no Docker → rebuild to Ubuntu 24.04 (§13.1) |
+| Dev box                                     | ❌ not bought                                                                                            |
+| Pipeline (build on develop, promote on tag, deploy-dev) | ✅ written, actionlint clean; ⚠️ never run in Actions                                          |
+| `make release` (`scripts/release.sh`)       | ✅ `make check-release` passes (6 cases, temp repos); never run against a real dev box                  |
+| Release tags                                | ❌ none in either repo                                                                                   |
+| GitHub Environments / secrets               | ❌ none — `sonar`, `deploy-dev` and `deploy` skip themselves                                             |
+| Repo visibility                             | ✅ both repos **public** (2026-10-07) — Environments, branch protection, unlimited Actions minutes, free public GHCR packages and SonarQube Cloud all depend on it |
+| be CI                                       | 🔴 `secrets` job red: `trivy edge image` finds 2 HIGH in `nginx:1.31-alpine` — CVE-2026-93990 (`libexpat` 2.8.4-r0 → 2.8.5-r0) and CVE-2026-103111 (`pcre2` 10.48-r0 → 10.49-r0). Blocks every be build, **including the dev build**. Fix: §13.9 |
+| fe CI                                       | ✅ branches green. The same nginx base is in `devforge-fe/Dockerfile`, so `image-dev` will hit the same CVE |
+| Default branch                              | ✅ `develop` on both repos                                                                               |
+| Software side (compose, up.sh, bootstrap, nginx) | ✅ written; ⚠️ never run on a real box — lines marked ⚠️ *check on the box* below                  |
+
+### 13.1 Manual work before touching the boxes
+
+Needs logins; cannot be scripted.
+
+| ☐ | Task                                                                                          | Why / notes                                                                         |
+| - | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| ✅ | Production Linode, **Singapore (`ap-south`)**, 4 shared vCPU / 8 GB                          | done                                                                                |
+| ☐ | **Rebuild** the production Linode from **Ubuntu 24.04 LTS**, SSH public key in *Authorized Keys* | wipes the disk (it is empty); `bootstrap.sh` refuses non-Ubuntu                  |
+| ☐ | Dev Linode: **Shared 2 GB, Singapore, Ubuntu 24.04 LTS**, SSH key in *Authorized Keys*        | its own box (§8 "Dev environment")                                                  |
+| ☐ | (recommended) **Linode Cloud Firewall** on both: inbound 22, 80, 443 only                     | first door; `ufw` is the second                                                     |
+| ☐ | **Linode Backups** on production only                                                         | fast restore, only copy of `uploads`; not a replacement for R2                      |
+| ☐ | Cloudflare DNS: `<domain>` and `dev.<domain>` **A** records, **orange cloud** both            | no `api.` record                                                                    |
+| ☐ | Cloudflare SSL/TLS mode **Full (strict)**                                                      | never Flexible                                                                      |
+| ☐ | Cloudflare **Origin Certificate** for `<domain>` **and** `*.<domain>`; save cert + key         | one cert for both boxes, 15 years                                                   |
+| ☐ | Cloudflare **Access** application on `dev.<domain>`, allow the team's emails                   | keeps dev private (§8 "Dev environment")                                            |
+| ☐ | Cloudflare cache rules: only `assets/*`, `index.html`; nothing on `/api/*`, `/ws/*`, `/uploads/*` | §9.5                                                                             |
+| ☐ | Google Console redirect URIs: `https://<domain>/api/auth/google/callback` **and** `https://dev.<domain>/…` | exact match                                                            |
+| ☐ | SMTP account (Resend or Brevo), sending domain verified                                        | production only; dev uses Mailpit                                                   |
+| ☐ | Cloudflare **R2** bucket + lifecycle rule "delete after 30 days" + API token                   | production backups                                                                  |
+| ☐ | **Two new** SSH key pairs for CD — one per box, never a personal key                           | a leaked dev key must not open production                                           |
+| ☐ | GitHub **Environment `development`** in **both** repos: `SSH_HOST`, `SSH_USER`=`devforge`, `SSH_KEY` (dev key) | turns `deploy-dev` on                                      |
+| ☐ | GitHub **Environment `production`** in **devforge-be** only: same three names (prod key), **required reviewer** = you | add the secrets after the first manual deploy (§13.4) |
+| ☐ | Set the 6 GHCR packages to **Public** (after the first develop build creates them)            | otherwise both boxes need a PAT to pull                                             |
+| ☐ | Your laptop: `DEV_SSH=devforge@<dev host>` in `devforge-be/.env`, and your key on the dev box  | `make release` reads `.deployed` over ssh                                           |
+| ☐ | External **uptime monitor** on `https://<domain>/readyz`, 5 min, Telegram alert                | production only; never on the VPS itself                                            |
+| ☐ | (optional) SonarQube Cloud: create org, bind both repos, add `SONAR_TOKEN` to both             | the `sonar` job turns itself on                                                     |
+| ☐ | (optional) Sentry for Go + React                                                               | runtime errors with stack traces                                                    |
+
+### 13.2 Provision the box
+
+From your machine, as root on the new box:
+
+```bash
+scp deploy/bootstrap.sh root@<ip>:/tmp/
+ssh root@<ip> 'bash /tmp/bootstrap.sh'
+```
+
+`bootstrap.sh` (idempotent where it matters):
+
+- installs `ca-certificates curl git ufw fail2ban unattended-upgrades cron`;
+- refuses to run on anything but Ubuntu;
+- installs Docker Engine + compose plugin from Docker's apt repo if Docker is
+  missing; refuses an existing Docker without the compose plugin;
+- writes `/etc/docker/daemon.json` (json-file 10 MB × 3) and restarts Docker;
+- creates user `devforge` in group `docker`, `/opt/devforge` owned by it, and
+  copies root's `authorized_keys` to it;
+- `ufw --force reset`, deny incoming, allow 22/80/443, enable;
+- writes `/etc/ssh/sshd_config.d/00-devforge.conf` (`PermitRootLogin
+  prohibit-password`, `PasswordAuthentication no`), validates with `sshd -t`,
+  reloads, prints the effective values — a drop-in because the first value
+  wins and a cloud-init drop-in could otherwise keep passwords on;
+- tops swap up with a 2 GB `/swapfile` when total swap is under 2 GB (Linode's
+  image has a ~512 MB swap disk);
+- nightly backup cron `/etc/cron.d/devforge-backup` at 03:15 → `/var/log/devforge-backup.log`, weekly logrotate × 8;
+- unattended security upgrades.
+
+⚠️ *Check on the box:* tested in an `ubuntu:24.04` container up to the Docker
+install (the OS guard and the apt repository work); the systemd, sshd, swap and
+`ufw` steps have only run on paper. Keep the root SSH session open until a
+**second** session logs in as `devforge` with the key. `ufw --force reset`
+overwrites any existing rules — read the output, not just the exit code.
+
+Then add the CD public key for `devforge`:
+
+```bash
+ssh root@<ip> 'cat >> /home/devforge/.ssh/authorized_keys' < cd_deploy_key.pub
+```
+
+### 13.3 Configure: `.env` and the certificate
+
+From here on, log in as `devforge`, not root.
+
+```bash
+git clone https://github.com/<owner>/devfore-be.git /opt/devforge/devforge-be
+cd /opt/devforge/devforge-be
+cp .env.prod.example .env && chmod 600 .env
+openssl rand -base64 32     # → JWT_SECRET
+openssl rand -base64 24     # → DB_PASSWORD
+nano .env
+```
+
+Only the be repo is cloned; the FE ships as an image. The directory must be
+`/opt/devforge/devforge-be` — the deploy job and the backup cron hard-code it.
+
+Lines that go wrong most often:
+
+| Variable          | Value                                    | If wrong                                                       |
+| ----------------- | ---------------------------------------- | -------------------------------------------------------------- |
+| `DOMAIN`          | the real domain                          | `up.sh` refuses to run                                         |
+| `IMAGE_REPO`      | `ghcr.io/<owner>`, lowercase             | pull fails                                                     |
+| `DB_PASSWORD`     | generated                                | `DATABASE_URL` interpolates it — edit only here                |
+| `PUBLIC_URL`      | `https://<domain>`, **no `/api`**        | uploads become `/api/uploads/…`, which no route serves         |
+| `TRUSTED_PROXIES` | `127.0.0.1,::1,172.16.0.0/12`            | rate limit global, all audit IPs identical                     |
+| `SMTP_*`          | provider values                          | new users never receive a code; no server error                |
+| `OPENROUTER_API_KEY` | **empty** at first                    | §9.6                                                           |
+| `R2_*`            | bucket, endpoint, key id, secret         | `backup.sh` exits with `parameter null or not set`             |
+
+Certificate, pasted from Cloudflare:
+
+```bash
+install -m 644 /dev/null deploy/nginx/certs/origin.pem
+install -m 600 /dev/null deploy/nginx/certs/origin.key
+nano deploy/nginx/certs/origin.pem   # certificate
+nano deploy/nginx/certs/origin.key   # private key
+```
+
+`deploy/nginx/certs/.gitignore` is `*` + `!.gitignore`, so the key never reaches
+git. Both `.env` and the cert survive every deploy (CD force-checks-out a tag and
+never cleans). Copy both into a password manager now.
+
+### 13.4 Order to production
+
+Steps 9 and 11 are skipped most often, and they are the only two that prove the
+safety net exists.
+
+```
+0. Fix be CI (§13.9 "Trivy is red")                ← now; it blocks every build, dev included
+1. §13.1 dashboard work (both Linodes on Ubuntu 24.04, DNS, cert, Access, Google, R2, SMTP)
+2. §13.2 bootstrap BOTH boxes
+3. §13.3 .env + cert on both — dev from the DEV block of .env.prod.example
+4. Dev on: add the `development` environment to both repos → push to develop
+   → watch images-dev / image-dev + deploy-dev → set the 6 GHCR packages Public
+5. Seed dev with demo data (§13.5) and verify dev (§13.6 against dev.<domain>)
+6. Merge develop into master; make release v=v0.1.0
+   → promote runs in both repos; `deploy` skips (no production secrets yet)
+7. §13.5 deploy v0.1.0 to production BY HAND; first admin
+8. §13.6 verify production
+9. §13.7 first backup by hand + RESTORE DRILL         ← do not postpone
+10. Production CD on: add the `production` environment (secrets + required reviewer)
+    → next sprint's release goes through CD end to end (§13.11)
+11. §13.8 rollback drill
+12. Authenticated Origin Pulls (§9.5), after the site has run a while
+13. SonarQube Cloud token, Sentry (optional)
+```
+
+The production `deploy` job skips itself until `SSH_HOST` exists in the
+`production` environment, which is what lets step 7 be done by hand and step 10
+be compared against it.
+
+### 13.5 First deploys
+
+**Dev, first time.** After step 4 has deployed dev once, seed demo data — the
+pipeline only migrates. On the dev box:
+
+```bash
+cd /opt/devforge/devforge-be
+set -a; . ./.env; set +a
+dc exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" < scripts/seed.sql
+```
+
+`seed.sql` creates demo accounts. That is fine behind Cloudflare Access and is
+exactly why it never runs in production.
+
+**Production, first release.** Dev must be healthy on the commits you mean to
+ship (`ssh devforge@<dev host> cat /opt/devforge/devforge-be/.deployed`), and
+`develop` merged into `master` in both repos. On your machine:
+
+```bash
+cd devforge-be
+make release v=v0.1.0
+```
+
+Wait until **both** repos' `promote` jobs are green. Then on the production box:
+
+```bash
+cd /opt/devforge/devforge-be
+git fetch --tags --force && git checkout --force --detach v0.1.0
+IMAGE_TAG=v0.1.0 ./deploy/up.sh
+```
+
+Expected end: `==> healthy on v0.1.0`. On the first release there is no
+`.image-tag`, so a failure prints `NO PREVIOUS TAG TO ROLL BACK TO` and leaves the
+stack up for you to read logs (`dc logs --tail 100 api`).
+
+**First admin.** `make admin` cannot work on a box: it runs
+`go run ./cmd/createadmin`, there is no Go there, and the distroless image
+contains only `/server`. Instead:
+
+1. Register a normal account at `https://<domain>` (no email gate blocks login,
+   so this works even before SMTP is set).
+2. Grant the role in SQL — roles live in `user_roles`, not on `users`:
+
+   ```bash
+   set -a; . ./.env; set +a
+   dc exec -T postgres psql -U "$DB_USER" -d "$DB_NAME" <<'SQL'
+   INSERT INTO user_roles (user_id, role_id)
+   SELECT u.id, r.id FROM users u, roles r
+   WHERE u.email = 'you@example.com' AND r.name = 'admin'
+   ON CONFLICT DO NOTHING;
+   SQL
+   ```
+
+3. Log out and back in so the token carries the role.
+
+### 13.6 Verify after going live
+
+From your machine, not from the box:
+
+```bash
+curl -sf https://<domain>/healthz            # process alive
+curl -sf https://<domain>/readyz             # + database reachable
+curl -sI https://<domain>/ | grep -i '^cf-'  # served through Cloudflare
+```
+
+In a browser — these only break in production:
+
+| Check                                                     | Proves                                                     |
+| --------------------------------------------------------- | ---------------------------------------------------------- |
+| Log in, press F5, still logged in                         | cookie + same origin                                       |
+| Open a lab, type quickly, no stutter                      | `/ws/` with `proxy_buffering off`                          |
+| A cover image renders                                     | `/uploads/*` route + `PUBLIC_URL` without `/api`           |
+| Open a lab, then `dc restart api` — terminal reconnects   | reconnect with backoff; every deploy does this to students |
+| Paste a `/r/<id>` link into Zalo/Slack → preview card     | crawler block ahead of the catch-all                       |
+| Your last login in `audit_logs.ip` is your real IP        | §9.5, both layers                                          |
+| Sign up a new account → code arrives by email             | `SMTP_*`                                                   |
+| Google login completes                                    | redirect URI                                               |
+
+Edge routing can also be checked on a dev machine, before any box:
+`make check-edge`. Run it after every edit to `deploy/nginx/devforge.conf` —
+`nginx -t` only proves the file parses.
+
+### 13.7 Backup and restore drill
+
+The cron from `bootstrap.sh` runs `scripts/backup.sh` at 03:15 daily. Do not
+wait for it:
+
+```bash
+./scripts/backup.sh       # pg_dump | gzip → s3://$R2_BUCKET/pg/devforge-<UTC>.sql.gz
+./scripts/restore.sh      # newest dump → scratch DB devforge_restore_check, prints row counts
+```
+
+- `backup.sh` refuses to upload a dump under 1 KB (that is a gzipped error).
+- `restore.sh` prints counts for `users`, `courses`, `labs`,
+  `lab_task_completions`. **Zeros mean the backup is broken, not the script.**
+  Drop `devforge_restore_check` afterwards.
+- Re-run the drill whenever a migration changes the schema shape.
+- Watch the cron: `tail /var/log/devforge-backup.log`.
+
+**Restoring for real.** `restore.sh --into-live` loads the newest dump into
+`$DB_NAME` **without dropping it** (it asks you to type the name). The dump
+contains the whole schema plus `schema_migrations`, so it must land in an
+**empty** database — loading it over a migrated one collides on every
+`CREATE TABLE` and on the rows migrations seed into `roles`.
+
+⚠️ Never run on a real box yet — drill it on a scratch box first.
+
+Lost the whole box:
+
+```bash
+# new box: §13.2, then §13.3 with .env and the cert from your password manager
+git fetch --tags --force && git checkout --force --detach <last good tag>
+IMAGE_TAG=<last good tag> dc up -d --wait postgres   # fresh, empty database
+./scripts/restore.sh --into-live
+IMAGE_TAG=<last good tag> ./deploy/up.sh              # migrate up is a no-op now
+```
+
+Damaged database on a live box (destructive — take a fresh `./scripts/backup.sh`
+first if the database still answers):
+
+```bash
+set -a; . ./.env; set +a
+dc stop api
+dc exec -T postgres psql -U "$DB_USER" -d postgres \
+  -c "DROP DATABASE \"$DB_NAME\" WITH (FORCE)" -c "CREATE DATABASE \"$DB_NAME\""
+./scripts/restore.sh --into-live
+dc up -d --wait
+```
+
+Uploaded images live in the `uploads` volume and are **not** in the dump — only
+Linode Backups covers them (§13.10).
+
+### 13.8 Rollback
+
+**Automatic:** `up.sh` rolls back by itself when a release is not healthy within
+120 s, to the tag in `.image-tag`, without migrating.
+
+**By hand** (bad release that passed its healthcheck):
+
+```bash
+cd /opt/devforge/devforge-be
+cat .image-tag                                  # what is serving now
+git tag --sort=-v:refname | head               # pick the previous release
+IMAGE_TAG=<previous tag> ./deploy/up.sh
+```
+
+- **Do not `git checkout` the old tag first.** Stay on the current checkout:
+  its `migrations/` contains every applied version, so `migrate up` is a no-op.
+  An older checkout lacks the newest file and `migrate` dies with "no migration
+  found for version N".
+- Use `up.sh`, not a bare `dc up`: `up.sh` also retags the four lab images and
+  rewrites `.image-tag`. A bare `dc up` leaves labs on the bad release and
+  `.image-tag` pointing at it.
+- Image only — never `migrate down` during an incident.
+- Afterwards the checkout (nginx config, migrations) is newer than the image.
+  That is fine only because both must be backward compatible. The next release
+  force-checks-out its own tag.
+
+**Drill it** (step 9 of §13.4) while nothing is on fire.
+
+### 13.9 Day-2 operations
+
+**What is running**
+
+```bash
+cat .image-tag                 # tag serving
+cat .deployed                  # be and fe commits serving (what `make release` reads on dev)
+dc ps
+git describe --tags            # checkout (detached HEAD on the tag is correct — never `git pull`)
+```
+
+**Logs**
+
+```bash
+dc logs -f --tail 100 api
+dc logs --tail 100 nginx
+docker ps --filter ancestor=devforge/linux:latest     # live lab containers (also git/docker/net)
+```
+
+**Change a variable** (no new release needed):
+
+```bash
+nano .env
+dc up -d --wait --force-recreate api
+```
+
+`MAX_CONTAINERS`, `LAB_SESSION_TTL`, `AI_DAILY_LIMIT` and the like are tuned this
+way. Changing `JWT_SECRET` signs everyone out. Changing `DB_PASSWORD` here does
+not change it inside an existing Postgres volume — run `ALTER USER` first.
+
+**Edge returns 502 after a deploy**
+
+```bash
+dc ps                                           # is api healthy?
+dc logs --tail 50 api
+dc exec nginx wget -qO- http://api:8080/healthz # can nginx reach api?
+```
+
+The third line separates "nginx cannot see api" from "api is unhealthy" — they
+look identical from outside. The resolver-variable pattern in `devforge.conf`
+should prevent stale DNS; if someone wrote a literal `proxy_pass http://api:8080`,
+that is the bug.
+
+**Trivy is red on a base image** (the current state, §13.0)
+
+1. Read the finding: image, package, installed → fixed version.
+2. Upstream rebuilt the same tag? Re-run the job (Trivy pulls fresh). If green,
+   done.
+3. Otherwise bump the pin to a tag that carries the fix, in **every** place it
+   lives: `docker-compose.prod.yml` (edge), `devforge-fe/Dockerfile` (web), and
+   any `labs/*/Dockerfile` affected. Keep pinning to a version line, not to
+   `alpine` or `latest`.
+4. No fixed image published yet and the release cannot wait → one
+   `.trivyignore` line with `exp:<date ≤ 30 days>` and the reason. Never without
+   an expiry.
+5. On the box, the edge picks up a new tag on the next `up.sh`.
+
+**Refresh Cloudflare IP ranges** (every few months, or when an `audit_logs.ip`
+shows a Cloudflare address):
+
+```bash
+curl -s https://www.cloudflare.com/ips-v4; curl -s https://www.cloudflare.com/ips-v6
+```
+
+Compare with the `set_real_ip_from` lines in `deploy/nginx/devforge.conf`, update
+the date comment, `make check-edge`, release.
+
+**Disk**
+
+```bash
+df -h /; docker system df
+```
+
+`up.sh` prunes dangling images after each healthy release. Old release images
+stay (they are rollback targets); remove ones older than the last few tags with
+`docker image rm` when space is tight.
+
+**Rotate a secret**
+
+- `JWT_SECRET`: edit `.env`, recreate `api`. Everyone is signed out.
+- Google client secret: rotate in Google Console, edit `.env`, recreate `api`.
+- CD key: new key pair → replace line in `/home/devforge/.ssh/authorized_keys` →
+  update `SSH_KEY` secret.
+
+**Origin certificate** expires 15 years after creation. Put the date in a
+calendar anyway.
+
+### 13.10 Deliberate debt
+
+| Item                                         | Why not yet                                                                                  |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Dev cannot roll back                         | It deploys the moving `:develop`; fixed forward by the next push                             |
+| Promote prints digests, does not compare them | The version is a re-tag of the pulled `dev-<sha>`; the log shows both. Add a hard check if they ever differ |
+| Log / metric aggregation (Grafana Cloud)     | Not blocking launch; do it once there are real users                                         |
+| Sentry                                       | Cheap; do with the first real users                                                          |
+| `make check-edge` in CI                      | Needs Docker (CI has it); ~6-line job, not added yet — run it by hand after edge edits        |
+| Uploads not backed up off-provider           | `backup.sh` dumps Postgres only; the `uploads` volume relies on Linode Backups               |
+| Cloudflare IP ranges hard-coded              | Dated 2026-09-18; refreshed by hand (§13.9). Nothing detects drift                           |
+| Authenticated Origin Pulls off               | Two-sided switch; enable after launch (§9.5)                                                 |
+| nginx pinned by minor line, not digest       | Consistent with `postgres:16-alpine`; Trivy edge scan is the safety net                      |
+| Chat WebSocket has no reconnect              | Terminal has it; chat shares `terminalURL` but not the retry. Losing chat does not kill a lab |
+| Drop Redis (sessions into Postgres)          | Works, zero config; saves one container — not worth it now                                   |
+
+### 13.11 Sprint release process
+
+A sprint is the planning rhythm; a release is whenever `develop` on dev is worth
+shipping — usually once per sprint, earlier when a finished feature carries a
+migration (a three-step migration is three releases, §8 "Migrations").
+
+```
+Sprint days    feature branch → PR into develop → CI → dev deploys it
+               test each feature on dev.<domain> as it lands
+
+Freeze         stop merging features into develop; fixes only
+               unfinished features stay on their branches — never merged half-done
+
+Test on dev    each feature's acceptance criteria + §13.6
+               bug → fix PR into develop → dev redeploys → test again
+
+Release        PR develop → master in BOTH repos (merge commit is fine)
+               make release v=vX.Y.0
+               approve `deploy` in the production environment (Actions)
+               §13.6 on production, watch logs for 30–60 min
+               release note
+
+Unfreeze       merging into develop resumes
+```
+
+Prerequisites on your machine: both repos cloned side by side, `DEV_SSH` in
+`devforge-be/.env`, your key on the dev box as `devforge`.
+
+What `make release` refuses, before tagging anything:
+
+| Refusal                                        | Meaning                                                            |
+| ---------------------------------------------- | ------------------------------------------------------------------ |
+| `refusing tag`                                 | version name fails `release-guard.sh`                              |
+| `dev has no healthy, labelled deploy recorded` | dev is mid-deploy, its last deploy failed, or it runs pre-label images — push to develop and wait |
+| `… is not on master`                           | merge develop into master first                                    |
+| `… already has vX.Y.Z`                         | that version exists — cut the next one                             |
+
+Versions: a release with features bumps the minor (`v1.3.0`); a release with
+only fixes bumps the patch (`v1.3.1`).
+
+**Bug policy (decided 2026-10-07): no hotfixes.** Every bug, whatever its
+severity, is fixed on `develop`, verified on dev, and reaches production with the
+next release. There is no `hotfix/*` branch and no path that patches production
+outside a release.
+
+```
+bug on production → branch fix/<name> from develop → PR into develop
+→ dev deploys it → verify on dev → ships with the next release
+```
+
+- Branch names: `feat/<name>` for features, `fix/<name>` for bugs, both from and
+  into `develop`.
+- A bug in production that cannot wait: if the last release brought it, **roll
+  back** to the previous tag (§13.8) — seconds, no code. The fix still goes
+  through `develop` and the next release. If rolling back does not help, the bug
+  waits for the next release.
+- Releases ship everything on `develop`, so unfinished work is never merged and
+  every merged change is tested on dev as it lands.
+
+### 13.12 When production has a bug
+
+Rule: **mitigate first, fix second.** There are no hotfixes (§13.11): the fix
+always goes through `develop` and the next release. What can happen right away
+is a rollback.
+
+```
+Bug reported on production
+│
+├─ 1. Confirm it on production, and check whether dev has it too
+│
+├─ 2. Did the latest release bring it?   (worked on the previous version?)
+│     ├─ yes, and users are blocked → ROLL BACK now (below), then go to 3
+│     └─ no / not sure / not blocking → go to 3
+│
+├─ 3. fix/<name> from develop → PR → dev → verify on dev
+│
+└─ 4. Ships with the next release (§13.11)
+```
+
+**Severity decides only whether to roll back** — every fix takes the same path:
+
+| Severity | Examples                                                        | Action now                                          |
+| -------- | --------------------------------------------------------------- | --------------------------------------------------- |
+| **SEV1** | site down, nobody can log in, labs cannot start, data loss, security hole | roll back if the last release caused it; tell users |
+| **SEV2** | a main feature broken, a workaround exists                      | roll back only if the last release caused it and the workaround is painful |
+| **SEV3** | minor or cosmetic                                               | nothing; `fix/` into the sprint                     |
+
+**Rolling back** (details and pitfalls in §13.8):
+
+```bash
+cd /opt/devforge/devforge-be
+cat .image-tag                          # the bad release
+git tag --sort=-v:refname | head        # pick the one before it
+IMAGE_TAG=<previous tag> ./deploy/up.sh
+```
+
+- Image only. Never `migrate down`. Never `git checkout` the old tag first.
+- When the bad release carried a migration the old image cannot live with, a
+  rollback will not help — which is why every migration must be backward
+  compatible (§8 "Migrations").
+- After a rollback, production runs an older version than `master`. The next
+  release restores order: it carries everything on `develop`, including the fix.
+
+**After a SEV1 or SEV2**, before closing it:
+
+1. A test that fails on the bug (the fix PR carries it).
+2. A short postmortem in the issue: what happened, why it was not caught on dev,
+   what stops it next time. No blame.
+3. If dev could not have caught it (real traffic, real data, SMTP, AI key), say
+   so — that is a gap in §8 "Dev environment", not in the code.
+
+---
+
+## 14. Decision log
+
+Newest first. Each line: what was decided, what was considered instead, and
+why. Change a decision by adding a line, not by editing an old one.
+
+| Date       | Decision                                                                 | Considered instead                                   | Why                                                                                         |
+| ---------- | ------------------------------------------------------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| 2026-10-07 | **Both repos public**                                                    | private + GitHub Pro; private on Free                | The pipeline needs Environments, unlimited Actions minutes and free GHCR storage; private on Free has none of them. History scanned first: gitleaks clean on all commits; the two author emails in history were accepted as public |
+| 2026-10-07 | **No hotfixes.** Bugs go `fix/*` → `develop` → dev → next release         | GitFlow `hotfix/*` from the prod tag; break-glass direct deploy | One path to production, nothing ships untested on dev; urgent cases are covered by rollback |
+| 2026-10-07 | **Keep rollback** as the only immediate action on production             | dropping it with hotfixes                            | Seconds, no code, already in `up.sh`; mitigates a bad release without bypassing dev         |
+| 2026-10-07 | **Sprint releases with a freeze**; early releases allowed                | release train; continuous delivery                   | Fits a small team's sprint rhythm; freeze keeps dev stable while it is tested               |
+| 2026-10-07 | **Build once on `develop`, promote the dev image on release**            | build again at the tag (previous design)             | Production runs the exact bits tested on dev; no base-image drift between test and release   |
+| 2026-10-07 | **Keep `develop` + `master`**                                            | trunk-based (`main` only)                            | Matches sprint releases; `master` stays the record of what was released                      |
+| 2026-10-07 | **Three environments: local, dev, production**; dev on its **own** Linode | dev as a second stack on the production box          | Port 80/443 conflict, unreleased code on the prod box, CPU contention, seat-count trap (§8 "Dev environment") |
+| 2026-10-07 | **Dev behind Cloudflare Access, demo data only**                         | public dev; copy of production data                  | Unreleased features and demo accounts stay private; no real personal data outside production |
+| 2026-10-07 | **GitHub Environments** `development` / `production`, reviewer on production | repo-wide `SSH_*` + `DEV_SSH_*` secrets           | Each job sees only its box's key; production needs a person's approval                      |
+| 2026-10-07 | **Linode** Shared 4 vCPU / 8 GB, Singapore, as production                | Hostinger KVM2 (previous plan)                       | Already owned; amd64 and Singapore keep every other part of the design                      |
+| 2026-10-07 | **Ubuntu 24.04 LTS**, rebuild from Arch                                   | keep Arch, port `bootstrap.sh` to pacman             | LTS + unattended security upgrades on a single box; Arch moves kernel and Docker on every upgrade |
+| 2026-10-07 | `bootstrap.sh` **installs Docker** from Docker's apt repo                 | require a Docker template                            | Linode's Ubuntu image has none; Ubuntu's `docker.io` lacks the compose plugin                |
+| 2026-10-07 | `MAX_CONTAINERS=16` on production                                        | 12 (2 vCPU plan), 25 (4 vCPU / 16 GB plan)           | 4 shared vCPU but 8 GB — an assumption until real load is measured (§9.4)                    |
+| 2026-10-07 | `INFRA.md` + `deploy/DEPLOY.md` merged into one file                     | keep two files                                       | One runbook; the two had drifted (wrong `IMAGE_TAG`, `UPLOAD_DIR`, commands that fail without `IMAGE_TAG`) |
+| 2026-09-21 | Staging deferred                                                         | —                                                    | Superseded 2026-10-07 by the dev environment                                                 |
+| 2026-09-18 | Trivy gates every image before push; edge image scanned too              | report-only scanning                                 | A scan after the push is a report, not a gate                                                |
+| earlier    | nginx + Cloudflare Origin Certificate at the edge                        | Caddy with automatic HTTPS                           | Behind the orange cloud, Caddy's ACME is the one feature that cannot be used (§9.5)         |
+| earlier    | FE image on the same box, same origin                                    | Cloudflare Pages                                     | One environment-free FE image promotable everywhere; no CORS or cross-site cookies (§9.1.1)  |
+| earlier    | Images in GHCR, pulled by the boxes                                      | build on the box                                     | Fast rollback, no compiling on the box students use (§9.2)                                   |
+| earlier    | SonarQube Cloud, never self-hosted                                       | SonarQube on the box                                 | 2–4 GB and CPU taken from lab seats (§9.4)                                                   |

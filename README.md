@@ -2,11 +2,11 @@
 
 Nền tảng học DevOps qua lab thực hành. Mỗi bài lab cấp cho học viên một **container Linux thật**, truy cập qua terminal trong trình duyệt, giới hạn 60 phút.
 
-Production chạy trên hai VPS trả tiền (prod + staging) cộng một tên miền; mọi thứ còn lại 0₫ — xem [§9 Hạ tầng production](INFRA.md#9-hạ-tầng-production).
+Chạy trên hai VPS trả tiền (production + dev) cộng một tên miền; mọi thứ còn lại 0₫ — xem [§9 Production infrastructure](INFRA.md#9-production-infrastructure).
 
 ---
 
-> **§8, §9 và §13 nằm ở [INFRA.md](INFRA.md).** Số mục giữ nguyên khi tách, nên
+> **§8, §9, §13 và §14 nằm ở [INFRA.md](INFRA.md).** Số mục giữ nguyên khi tách, nên
 > mọi `§9.5`, `§13.2`… trong file này và trong comment của code vẫn trỏ đúng chỗ —
 > chỉ là chúng nằm ở file bên cạnh. File này giữ §0–§7 và §10–§12.
 
@@ -17,7 +17,7 @@ Vite/React/TS/Tailwind ─HTTP+WS→ Go/Gin/GORM ─→ Postgres
                                       │
                              socket-proxy → Docker → lab container (hardened, TTL 20')
 
-be:  Cloudflare(DNS+TLS) → nginx → Docker Compose → Hostinger VPS (amd64, Singapore)
+be:  Cloudflare(DNS+TLS) → nginx → Docker Compose → Linode VPS (amd64, Singapore)
 fe:  cùng VPS, cùng origin — image devforge-web sau chính cái biên đó
 
 Actions → GHCR (cả hai repo) → tag v* promote → ssh (chỉ repo be) → up.sh pull
@@ -27,11 +27,11 @@ Ba khối chức năng:
 
 1. **Học viên** — landing, danh sách khoá học, chi tiết khoá học (4 tab), lab + terminal thật, chấm điểm, lịch sử, bảng xếp hạng, chat chung, bài mô phỏng, War Room
 2. **Admin** — CRUD khoá học/lab/task, chạy thử `check_script`, ban user, kill session đang chạy, audit log, bảng sự kiện hệ thống
-3. **Hạ tầng** — 2 môi trường local/production, CI/CD, cấu hình server, observability, backup + diễn tập restore
+3. **Hạ tầng** — 3 môi trường local/dev/production, CI/CD, cấu hình server, observability, backup + diễn tập restore
 
-Đã chốt hạ tầng: **Hostinger VPS KVM2 (2 vCPU amd64 / 8 GB, Singapore)**, **nginx + Cloudflare Origin Certificate** ở biên, FE và API **cùng một origin** trên máy đó (§9.1.1 — quyết định Cloudflare Pages đã bị đảo, lý do là artifact chứ không phải giá). Hai repo, hai image, một đường deploy. Chi phí cố định = VPS + tên miền; xem §9.
+Đã chốt hạ tầng: **Linode VPS (4 vCPU shared amd64 / 8 GB, Singapore `ap-south`)**, **nginx + Cloudflare Origin Certificate** ở biên, FE và API **cùng một origin** trên máy đó (§9.1.1 — quyết định Cloudflare Pages đã bị đảo, lý do là artifact chứ không phải giá). Hai repo, hai image, một đường deploy. Chi phí cố định = VPS + tên miền; xem §9.
 
-**Phương án Oracle Always Free / Caddy là bản cũ.** File trên đĩa đã theo bản đã chốt — Hostinger + nginx + GHCR; thứ còn thiếu là **máy thật**, và nó chưa từng được dựng. Danh sách còn lại: **§13**.
+**Phương án Oracle Always Free / Caddy là bản cũ.** File trên đĩa đã theo bản đã chốt — Linode + nginx + GHCR. Máy đã có nhưng **chưa dựng**: phải rebuild sang Ubuntu 24.04 trước (§13.0). Danh sách còn lại: **§13**.
 
 ---
 
@@ -97,18 +97,18 @@ PostgreSQL 16. Backup `pg_dump` cron → nén → Cloudflare R2 (free tier 10 GB
 | Hạng mục      | Chọn                                               | Giá        |
 | ------------- | -------------------------------------------------- | ---------- |
 | Local         | Docker Compose + `air` (Go) + `vite dev`           | —          |
-| **Prod — be** | Hostinger VPS KVM2, amd64, Singapore + Docker Compose | trả tiền   |
+| **Prod — be** | Linode 4 vCPU shared / 8 GB, amd64, Singapore + Docker Compose | trả tiền   |
 | **Prod — fe** | Cùng VPS, cùng origin — image riêng, xem §9.1.1    | 0₫         |
 | Reverse proxy | nginx (container trong compose)                    | 0₫         |
 | TLS           | Cloudflare Origin Certificate — 15 năm, không renew | 0₫        |
 | DNS + proxy   | Cloudflare, **mây cam bắt buộc** (§9.5)            | 0₫         |
 | Registry      | GHCR — build ở Actions, box chỉ `pull` (§9.2)      | 0₫         |
-| CI/CD be      | Actions → GHCR → ssh (staging ở master, prod ở tag) | 0₫        |
-| CI/CD fe      | Actions → GHCR (build ở master, promote ở tag)     | 0₫         |
-| Staging       | VPS thứ hai, cùng compose khác `.env` (§8)          | trả tiền   |
+| CI/CD be      | Actions: push `develop` → build 1 lần → dev; tag → promote image dev đã chạy → prod (§8) | 0₫ |
+| CI/CD fe      | Actions: push `develop` → build → dev; tag → promote | 0₫ |
+| Dev           | Linode thứ hai (2 GB), cùng compose khác `.env`, sau Cloudflare Access (§8) | trả tiền |
 | Config server | `deploy/bootstrap.sh` (một lần mỗi máy, không Ansible) | 0₫       |
-| Secrets       | GitHub Secrets (`SSH_*`, `STAGING_SSH_*`) / env file `chmod 600` trên server | 0₫ |
-| Backup        | snapshot Hostinger + `scripts/backup.sh` → Cloudflare R2 | 0₫  |
+| Secrets       | GitHub Environments `development` / `production` (`SSH_*`) / env file `chmod 600` trên server | 0₫ |
+| Backup        | Linode Backups + `scripts/backup.sh` → Cloudflare R2 | Linode Backups trả tiền |
 | Sinh kịch bản sim | OpenRouter (tuỳ chọn, tắt được)                | xem §9.6   |
 | Scan secret   | gitleaks (job `secrets` trong cả hai `ci.yml`)     | 0₫         |
 | Scan lỗ hổng  | Trivy — image + `fs`, chặn HIGH/CRITICAL có bản vá | 0₫         |
@@ -380,17 +380,17 @@ Container do học viên gõ lệnh = code lạ chạy trên máy chủ. Bắt b
 
 ## 8, 9, 13. Hạ tầng & triển khai → [INFRA.md](INFRA.md)
 
-Môi trường, biến cấu hình, routing, migration, CI/CD, quét bảo mật, staging, máy
+Môi trường, biến cấu hình, routing, migration, CI/CD, quét bảo mật, môi trường dev, máy
 chủ, chi phí, sức chứa, rủi ro, và danh sách việc còn phải làm — tất cả ở
-[INFRA.md](INFRA.md), giữ nguyên số mục §8, §9 và §13.
+[INFRA.md](INFRA.md), giữ nguyên số mục §8, §9, §13 và §14 (nhật ký quyết định).
 
 Ba thứ hay cần nhất:
 
 | Cần gì | Ở đâu |
 | --- | --- |
-| Cắt một bản phát hành | `make release v=v1.2.0` — [INFRA §8, CI/CD](INFRA.md#cicd--hai-repo-gặp-nhau-ở-registry) |
-| Lùi bản đang chạy | `IMAGE_TAG=<tag cũ> … up -d --wait` — [deploy/DEPLOY.md](deploy/DEPLOY.md) |
-| Việc còn phải làm để lên máy thật | [INFRA §13](INFRA.md#13-việc-cần-làm--mua-máy) |
+| Cắt một bản phát hành | `make release v=v1.2.0` — [INFRA §8, CI/CD](INFRA.md#cicd--two-repos-meeting-at-the-registry) |
+| Lùi bản đang chạy | `IMAGE_TAG=<tag cũ> ./deploy/up.sh` — [INFRA §13.8](INFRA.md#138-rollback) |
+| Việc còn phải làm để lên máy thật | [INFRA §13](INFRA.md#13-runbook--from-no-box-to-production) |
 
 
 ## 10. Lộ trình
@@ -409,8 +409,8 @@ Ba thứ hay cần nhất:
 | **P8**   | Nội dung: 3 khoá (Linux, Git, Docker) × 5 lab                               | ✅ |
 | **P10**  | Backup pg_dump → R2 + diễn tập restore                                      | ⚠️ script + cron đã xong (13.0 #5, #7) — **diễn tập restore vẫn chưa ai chạy** |
 | **P3.5** | Observability: metrics Go + Grafana Alloy → Grafana Cloud + alert           | ❌ |
-| **P9**   | Deploy prod: compose prod, CD qua SSH, `TRUSTED_PROXIES`                    | ✅ pipeline xong (GHCR, Trivy, promote, staging) — **chưa có máy để chạy** |
-| **P9.5** | Mua 2 VPS (prod + staging), Caddy → nginx, bootstrap, DNS                    | ◐ — phần mềm xong (nginx, bootstrap, runbook); còn mua máy + DNS, §13 |
+| **P9**   | Deploy prod: compose prod, CD qua SSH, `TRUSTED_PROXIES`                    | ✅ pipeline xong (build trên develop, promote ở tag, deploy dev + prod) — **chưa chạy thật** |
+| **P9.5** | 2 Linode (prod + dev), Caddy → nginx, bootstrap, DNS                         | ◐ — prod đã mua (chưa rebuild Ubuntu), dev chưa mua; §13 |
 | **P11**  | _(tuỳ chọn)_ tách runner node riêng, gVisor, hoặc chuyển k3s                | — |
 
 **Thứ tự: P10 → P3.5 → P9.** Backup là thứ duy nhất còn lại khi mọi thứ khác biến mất — làm nó trước khi có gì để mất. Rồi đến quan sát được, rồi mới tới tự động deploy.
@@ -451,8 +451,7 @@ devforge-workspace/
 │   ├── deploy/
 │   │   ├── nginx/              # devforge.conf + certs/ (Origin Cert, không commit)
 │   │   ├── bootstrap.sh        # dựng máy 1 lần — thay Ansible
-│   │   ├── up.sh               # pull → migrate → up --wait → rollback theo tag
-│   │   └── DEPLOY.md           # runbook triển khai
+│   │   └── up.sh               # pull → migrate → up --wait → rollback theo tag
 │   ├── .github/workflows/ci.yml   # lint/test/coverage + gitleaks + trivy + GHCR + deploy
 │   ├── Dockerfile              # build → prod (distroless)
 │   ├── docker-compose.yml      # postgres + redis + mailpit + docker-proxy (dev)
