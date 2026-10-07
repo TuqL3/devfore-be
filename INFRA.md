@@ -793,7 +793,8 @@ Checked 2026-10-07. Update this block whenever a line changes.
 | `make release` (`scripts/release.sh`)       | ✅ `make check-release` passes (6 cases, temp repos); never run against a real dev box                  |
 | Release tags                                | ❌ none in either repo                                                                                   |
 | GitHub Environments / secrets               | ❌ none — `sonar`, `deploy-dev` and `deploy` skip themselves                                             |
-| be CI                                       | 🔴 `secrets` job red: `trivy edge image` finds CVE-2026-93990 (`libexpat` 2.8.4-r0, fixed in 2.8.5-r0) in `nginx:1.31-alpine`. Blocks every be build, **including the dev build**. Fix: §13.9 |
+| Repo visibility                             | ✅ both repos **public** (2026-10-07) — Environments, branch protection, unlimited Actions minutes, free public GHCR packages and SonarQube Cloud all depend on it |
+| be CI                                       | 🔴 `secrets` job red: `trivy edge image` finds 2 HIGH in `nginx:1.31-alpine` — CVE-2026-93990 (`libexpat` 2.8.4-r0 → 2.8.5-r0) and CVE-2026-103111 (`pcre2` 10.48-r0 → 10.49-r0). Blocks every be build, **including the dev build**. Fix: §13.9 |
 | fe CI                                       | ✅ branches green. The same nginx base is in `devforge-fe/Dockerfile`, so `image-dev` will hit the same CVE |
 | Default branch                              | ✅ `develop` on both repos                                                                               |
 | Software side (compose, up.sh, bootstrap, nginx) | ✅ written; ⚠️ never run on a real box — lines marked ⚠️ *check on the box* below                  |
@@ -1320,6 +1321,7 @@ why. Change a decision by adding a line, not by editing an old one.
 
 | Date       | Decision                                                                 | Considered instead                                   | Why                                                                                         |
 | ---------- | ------------------------------------------------------------------------ | ---------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| 2026-10-07 | **Both repos public**                                                    | private + GitHub Pro; private on Free                | The pipeline needs Environments, unlimited Actions minutes and free GHCR storage; private on Free has none of them. History scanned first: gitleaks clean on all commits; the two author emails in history were accepted as public |
 | 2026-10-07 | **No hotfixes.** Bugs go `fix/*` → `develop` → dev → next release         | GitFlow `hotfix/*` from the prod tag; break-glass direct deploy | One path to production, nothing ships untested on dev; urgent cases are covered by rollback |
 | 2026-10-07 | **Keep rollback** as the only immediate action on production             | dropping it with hotfixes                            | Seconds, no code, already in `up.sh`; mitigates a bad release without bypassing dev         |
 | 2026-10-07 | **Sprint releases with a freeze**; early releases allowed                | release train; continuous delivery                   | Fits a small team's sprint rhythm; freeze keeps dev stable while it is tested               |
