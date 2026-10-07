@@ -2,13 +2,14 @@
 
 Nền tảng học DevOps qua lab thực hành. Mỗi bài lab cấp cho học viên một **container Linux thật**, truy cập qua terminal trong trình duyệt, giới hạn 60 phút.
 
-Chạy trên hai VPS trả tiền (production + dev) cộng một tên miền; mọi thứ còn lại 0₫ — xem [§9 Production infrastructure](INFRA.md#9-production-infrastructure).
+**Phần DevOps đang được dựng lại từ đầu** — xem §8, 9, 13 bên dưới.
 
 ---
 
-> **§8, §9, §13 và §14 nằm ở [INFRA.md](INFRA.md).** Số mục giữ nguyên khi tách, nên
-> mọi `§9.5`, `§13.2`… trong file này và trong comment của code vẫn trỏ đúng chỗ —
-> chỉ là chúng nằm ở file bên cạnh. File này giữ §0–§7 và §10–§12.
+> **DevOps đang dựng lại từ đầu.** Docker, CI/CD, deploy và `INFRA.md` đã được gỡ
+> ngày 2026-10-07 để dựng lại từng phần. Bản hoàn chỉnh trước đó nằm ở tag `devops-reference`
+> (`git show devops-reference:INFRA.md`). Các tham chiếu `§8`, `§9`, `§13` trong file
+> này trỏ vào bản đó cho tới khi `INFRA.md` mới được viết. File này giữ §0–§7 và §10–§12.
 
 ## 0. Tóm tắt
 
@@ -94,40 +95,9 @@ PostgreSQL 16. Backup `pg_dump` cron → nén → Cloudflare R2 (free tier 10 GB
 
 ### Hạ tầng
 
-| Hạng mục      | Chọn                                               | Giá        |
-| ------------- | -------------------------------------------------- | ---------- |
-| Local         | Docker Compose + `air` (Go) + `vite dev`           | —          |
-| **Prod — be** | Linode 4 vCPU shared / 8 GB, amd64, Singapore + Docker Compose | trả tiền   |
-| **Prod — fe** | Cùng VPS, cùng origin — image riêng, xem §9.1.1    | 0₫         |
-| Reverse proxy | nginx (container trong compose)                    | 0₫         |
-| TLS           | Cloudflare Origin Certificate — 15 năm, không renew | 0₫        |
-| DNS + proxy   | Cloudflare, **mây cam bắt buộc** (§9.5)            | 0₫         |
-| Registry      | GHCR — build ở Actions, box chỉ `pull` (§9.2)      | 0₫         |
-| CI/CD be      | Actions: push `develop` → build 1 lần → dev; tag → promote image dev đã chạy → prod (§8) | 0₫ |
-| CI/CD fe      | Actions: push `develop` → build → dev; tag → promote | 0₫ |
-| Dev           | Linode thứ hai (2 GB), cùng compose khác `.env`, sau Cloudflare Access (§8) | trả tiền |
-| Config server | `deploy/bootstrap.sh` (một lần mỗi máy, không Ansible) | 0₫       |
-| Secrets       | GitHub Environments `development` / `production` (`SSH_*`) / env file `chmod 600` trên server | 0₫ |
-| Backup        | Linode Backups + `scripts/backup.sh` → Cloudflare R2 | Linode Backups trả tiền |
-| Sinh kịch bản sim | OpenRouter (tuỳ chọn, tắt được)                | xem §9.6   |
-| Scan secret   | gitleaks (job `secrets` trong cả hai `ci.yml`)     | 0₫         |
-| Scan lỗ hổng  | Trivy — image + `fs`, chặn HIGH/CRITICAL có bản vá | 0₫         |
-| Lint          | golangci-lint + lefthook (be), oxlint + tsc (fe)   | —          |
-| Coverage      | `go test -coverprofile`, sàn 16.5% trong CI        | —          |
-| **Uptime**    | UptimeRobot / BetterStack ping `/readyz` — **ngoài hạ tầng**, xem §9.9 | 0₫ — ⏳ chưa bật |
-| **Error tracking** | Sentry (Go + React)                          | 0₫ — ⏳ chưa bật |
-
-**Chưa có: uptime, error tracking, gom log, metric, alert, đo traffic.** Muốn xem log lúc này chỉ có `docker compose logs`. Thứ tự nên làm, theo giá trị trên mỗi phút bỏ ra:
-
-1. **Uptime monitor ngoài** — 5 phút cấu hình, và là thứ duy nhất báo được "máy chết". Xem §9.9.
-2. **Sentry** — lỗi runtime tự bay về kèm stacktrace, không phải grep log.
-3. **Grafana Cloud + agent Alloy** — metric, log, alert.
-
-**Không tự dựng Prometheus/Grafana/Loki trên máy.** Ba thứ đó ăn ~2 GB RAM và CPU thật; trên một box đang chạy lab container, chúng cạnh tranh tài nguyên với chính thứ chúng giám sát — và khi máy quá tải thì dashboard chết trước. Grafana Cloud free tier (10k series, 50 GB log, alert + contact point Telegram) làm đúng việc đó, 0₫, trên máy chỉ còn một agent. Umami cho traffic nằm cùng nhóm đó: đã chọn, chưa cài. Trivy thì không — nó chạy **trong Actions**, không phải trên box, nên không tranh tài nguyên với gì cả; xem §8 "Quét bảo mật và chất lượng mã". Cùng lý do đó mà SonarQube tự dựng bị loại thẳng: nó là thứ duy nhất trong danh sách đòi chỗ trên chính cái máy đang bán ghế lab.
-
-**Không dùng Terraform, cũng không dùng Ansible.** Terraform để quản hai máy không bao giờ bị destroy là công cụ lớn hơn việc cần làm; Ansible cho hai host chạy một lần cũng vậy — không có inventory, không có drift để hội tụ. `deploy/bootstrap.sh` là bốn mươi dòng apt, chạy một lần trên mỗi máy.
-
-Không dùng: Jaeger/tracing, ELK, Vault, Consul, service mesh, SOPS, Kubernetes.
+Đang dựng lại từ đầu — xem §8, 9, 13. Thiết kế đích (Linode, 3 môi trường
+local/dev/production, build once/promote, nginx + Cloudflare) nằm ở tag `devops-reference`,
+`INFRA.md` §8.0 và §14.
 
 ---
 
@@ -180,7 +150,7 @@ Kiểu bài thứ tư (`lab_tasks.kind = 'sim'`) chấm theo kết quả engine 
 | Image lab (Dockerfile, gói cài sẵn)                                 | Git + CI build          |
 | `check_script`                                                      | Admin UI + nút Chạy thử |
 
-**DB là nguồn sự thật duy nhất.** YAML chỉ dùng `make seed` cho môi trường trống lúc dựng local — không seed đè lúc app khởi động.
+**DB là nguồn sự thật duy nhất.** YAML chỉ dùng `scripts/seed.sql` cho môi trường trống lúc dựng local — không seed đè lúc app khởi động.
 
 Hệ quả: tạo khoá học mới không cần deploy. Tạo môi trường lab kiểu mới (lab cần `kubectl` cài sẵn) thì cần commit Dockerfile + đợi CI build image.
 
@@ -368,7 +338,7 @@ Container do học viên gõ lệnh = code lạ chạy trên máy chủ. Bắt b
 
 ### Admin
 
-1. Admin đầu tiên tạo bằng CLI trên server: `make admin email=... password=...`. **Không có route đăng ký admin trong API.**
+1. Admin đầu tiên tạo bằng CLI trên server: `go run ./cmd/createadmin -email ... -password ...`. **Không có route đăng ký admin trong API.**
 2. **TOTP 2FA bắt buộc** cho role admin.
 3. Role lưu ở bảng `user_roles` riêng, không phải cột `is_admin` trên `users`.
 4. `check_script` **chỉ chạy trong container lab đã hardened**, không bao giờ trên host.
@@ -378,19 +348,21 @@ Container do học viên gõ lệnh = code lạ chạy trên máy chủ. Bắt b
 
 ---
 
-## 8, 9, 13. Hạ tầng & triển khai → [INFRA.md](INFRA.md)
+## 8, 9, 13. Hạ tầng & triển khai — đang dựng lại
 
-Môi trường, biến cấu hình, routing, migration, CI/CD, quét bảo mật, môi trường dev, máy
-chủ, chi phí, sức chứa, rủi ro, và danh sách việc còn phải làm — tất cả ở
-[INFRA.md](INFRA.md), giữ nguyên số mục §8, §9, §13 và §14 (nhật ký quyết định).
+Toàn bộ phần DevOps đã được gỡ ngày 2026-10-07 để dựng lại từng phần, từ đầu.
+Bản hoàn chỉnh trước đó vẫn đọc được:
 
-Ba thứ hay cần nhất:
-
-| Cần gì | Ở đâu |
+| Cần gì | Lệnh |
 | --- | --- |
-| Cắt một bản phát hành | `make release v=v1.2.0` — [INFRA §8, CI/CD](INFRA.md#cicd--two-repos-meeting-at-the-registry) |
-| Lùi bản đang chạy | `IMAGE_TAG=<tag cũ> ./deploy/up.sh` — [INFRA §13.8](INFRA.md#138-rollback) |
-| Việc còn phải làm để lên máy thật | [INFRA §13](INFRA.md#13-runbook--from-no-box-to-production) |
+| Đọc tài liệu hạ tầng cũ | `git show devops-reference:INFRA.md` |
+| Xem một file cũ | `git show devops-reference:<đường dẫn>` |
+| Lấy lại một file cũ | `git checkout devops-reference -- <đường dẫn>` |
+| Xem những gì đã gỡ | `git diff --stat devops-reference develop` |
+
+Lộ trình dựng lại: Docker local → cổng chất lượng local → CI → build image + GHCR →
+dựng server → biên prod (nginx, Cloudflare) → deploy script → CD lên dev → release
+lên prod → backup + giám sát.
 
 
 ## 10. Lộ trình
@@ -448,27 +420,14 @@ devforge-workspace/
 │   ├── migrations/             # SQL, golang-migrate
 │   ├── labs/                   # Dockerfile 4 image lab + rc file dùng chung
 │   ├── scripts/                # seed.sql, check-seed.sh, smoke-auth.sh, sim-pipelines/
-│   ├── deploy/
-│   │   ├── nginx/              # devforge.conf + certs/ (Origin Cert, không commit)
-│   │   ├── bootstrap.sh        # dựng máy 1 lần — thay Ansible
-│   │   └── up.sh               # pull → migrate → up --wait → rollback theo tag
-│   ├── .github/workflows/ci.yml   # lint/test/coverage + gitleaks + trivy + GHCR + deploy
-│   ├── Dockerfile              # build → prod (distroless)
-│   ├── docker-compose.yml      # postgres + redis + mailpit + docker-proxy (dev)
-│   ├── docker-compose.prod.yml # api + web từ GHCR, nginx — mailpit tắt bằng profile
-│   ├── .golangci.yml · .trivyignore · .dockerignore
-│   ├── .air.toml · Makefile · lefthook.yml · .env.example
+│   ├── .air.toml · .env.example
 │
 └── devforge-fe/                # REPO 2 — Vite + React (chạy standalone)
     ├── src/{pages,components,api,hooks,context,lib,sims}
     │   ├── pages/admin/
     │   └── lib/*.check.ts      # assert của node, không framework
-    ├── Dockerfile · nginx.static.conf  # image devforge-web, VITE_API_URL ghim rỗng
-    ├── .github/workflows/ci.yml   # oxlint/tsc/check/build + gitleaks + trivy + GHCR
-    ├── vite.config.ts · lefthook.yml · .env.example
+    ├── vite.config.ts · .env.example
 ```
-
-`deploy/monitoring/`, `deploy/terraform/` và `deploy/ansible/` đều đã bỏ, xem §1. Trên máy hiện không có agent quan sát nào — khi có sẽ là một service Alloy trong compose, không phải Prometheus tự dựng.
 
 **Vì sao polyrepo:** be/fe tách sạch theo ranh giới repo — CI riêng, phân quyền riêng, mỗi bên tự build và tự promote image của mình. Chỗ duy nhất hai bên gặp nhau là GHCR: repo be sở hữu cả hai VPS và là đường deploy duy nhất, repo fe chỉ đẩy image. Cái giá là một quy ước — cùng một tên tag trên cả hai repo — và §8 mô tả cái cổng chặn khi ai đó quên.
 
@@ -476,70 +435,42 @@ devforge-workspace/
 
 ## 12. Chạy local
 
-Hai repo độc lập, mở **2 terminal**:
+**Chưa có cách chạy một lệnh.** `docker-compose.yml` và `Makefile` đã gỡ cùng phần
+DevOps, và được dựng lại ở **Phần 1** của lộ trình (§8, 9, 13). Trong lúc chờ, cần
+tự có Postgres 16 và Redis 7 khớp `.env`, rồi:
 
 ```bash
-# Terminal 1 — backend stack (postgres + redis + mailpit + docker-proxy + api)
-cd devforge-be
+# devforge-be
 cp .env.example .env
-make migrate                  # một lệnh: bật postgres, chạy migration, nạp nội dung, build 4 image lab
-npx lefthook install          # git hook (1 lần)
+go run ./cmd/server                 # hoặc `air` để hot reload (.air.toml vẫn còn)
 
-# Terminal 2 — frontend (Vite dev, hot reload)
-cd devforge-fe
-cp .env.example .env          # VITE_API_URL=http://localhost:8080
-npm ci
-npm run dev                   # vite :5173
-npx lefthook install          # git hook (1 lần)
+# devforge-fe
+cp .env.example .env                # VITE_API_URL trỏ tới API
+npm ci && npm run dev               # vite :5173
 ```
 
-| Cổng             | Dịch vụ                                   | Repo        |
-| ---------------- | ----------------------------------------- | ----------- |
-| `localhost:5173` | Vite dev server                           | devforge-fe |
-| `localhost:8080` | Go API (FE trỏ trực tiếp, CORS cho :5173) | devforge-be |
-| `localhost:5432` | Postgres                                  | devforge-be |
-| `localhost:6379` | Redis (refresh session)                   | devforge-be |
-| `localhost:8025` | Mailpit — xem mọi mail app gửi            | devforge-be |
-| `localhost:2375` | docker-socket-proxy                       | devforge-be |
+Migration chạy bằng `golang-migrate` trên `migrations/`; nội dung demo là
+`scripts/seed.sql`; 4 image lab build từ `labs/<tên>/Dockerfile` với context
+`labs/`, đặt tên `devforge/<tên>:latest`. Cách cũ làm tất cả bằng một lệnh:
+`git show devops-reference:Makefile`.
 
-Kiểm tra API: `curl localhost:8080/healthz` · `curl localhost:8080/readyz` · `curl localhost:8080/api/ping`
-
-`make help` (trong `devforge-be`) xem toàn bộ lệnh.
-
-`make migrate` gộp cả bốn bước và chạy lại được bao nhiêu lần cũng được: migration
-đã chạy thì bỏ qua, seed chỉ chèn vào chỗ trống, image có cache. Tài khoản đầu
-tiên (`superadmin` / `lukas`) do migration `000020` tạo chứ không do seed, nên
-chúng có mặt kể cả khi bỏ qua dữ liệu demo.
-
-Ở môi trường **không phải máy local** dùng `make migrate-schema` — chỉ chạy
-migration, không nạp nội dung demo và không build image.
+Tài khoản đầu tiên (`superadmin` / `lukas`) do migration `000020` tạo chứ không do
+seed, nên có mặt kể cả khi bỏ qua dữ liệu demo.
 
 ### Kiểm tra trước khi push
 
 ```bash
 # devforge-be
-gofmt -l . && golangci-lint run ./... && go test ./...
-make cover                    # sàn coverage của CI là 16.5%, cần `make up` trước
-make check-seed               # cần docker: mọi check_script phải TRƯỢT trên container mới,
-                              # rồi phải ĐẬU sau lời giải trong scripts/seed-solutions.tsv
-make check-sim                # cần DB, không cần docker: pipeline sai phải trượt, đúng phải đậu
+gofmt -l . && go test ./...
+go run ./cmd/checksim               # cần DB: pipeline sai phải trượt, đúng phải đậu
+bash scripts/check-seed.sh          # cần docker + 4 image lab: check_script trượt trên
+                                    # container mới, đậu sau lời giải trong seed-solutions.tsv
 
 # devforge-fe
 npx tsc --noEmit && npx oxlint && npm run check
 ```
 
 `npm run check` chạy 8 file assert (`json`, `clock`, `mdSummary`, `sim`, `wsRetry`, `linux`,
-`search`, `sort`) bằng `node --experimental-strip-types`, không framework. Cả tám **đã nằm
-trong CI** của FE (`lint → tsc → check → build`).
+`search`, `sort`) bằng `node --experimental-strip-types`, không framework.
 
-`make check-seed` và `make check-sim` cũng ngoài CI — chúng cần docker và database, chấp nhận được,
-nhưng phải chạy tay khi sửa nội dung seed.
-
-`make check-edge` cũng vậy, và nó là cái duy nhất kiểm được `deploy/nginx/devforge.conf`: dựng
-chính file đó trước hai upstream giả rồi hỏi nó từng đường dẫn. `nginx -t` chỉ nói file cú pháp
-đúng — nó không nói `/uploads/*` có rơi vào SPA hay không, mà đó là lỗi trả **200 kèm ảnh vỡ**
-chứ không phải 404 để grep. Chạy tay mỗi lần sửa file edge.
-
-> Compose đặt tên `devforge-be`, tránh trùng volume/container project khác trên máy.
-> Dev không có reverse proxy nào — FE gọi thẳng API. Edge (`deploy/nginx`) chỉ tồn tại ở **prod**,
-> và đó là lý do hai lỗi ở §9.5 không bao giờ lộ ra lúc dev.
+Chưa có CI: không gì trong số này chạy tự động cho tới khi Phần 3 của lộ trình xong.
